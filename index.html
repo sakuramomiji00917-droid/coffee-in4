@@ -908,10 +908,10 @@
             let types = Object.keys(companyTypeProfiles);
             // セクター別傾向
             let weights;
-            if (c.sector === 'bank')  weights = [0.10, 0.40, 0.20, 0.10, 0.20];
+            if (c.sector === 'bank') weights = [0.10, 0.40, 0.20, 0.10, 0.20];
             else if (c.sector === 'sogo') weights = [0.25, 0.10, 0.30, 0.25, 0.10];
-            else if (c.sector === 're')   weights = [0.15, 0.30, 0.25, 0.15, 0.15];
-            else if (c.sector === 'ins')  weights = [0.05, 0.50, 0.25, 0.10, 0.10];
+            else if (c.sector === 're') weights = [0.15, 0.30, 0.25, 0.15, 0.15];
+            else if (c.sector === 'ins') weights = [0.05, 0.50, 0.25, 0.10, 0.10];
             else weights = [0.20, 0.20, 0.20, 0.25, 0.15]; // coffee/it/log/etc
             // 重み付きランダム選択
             let r = Math.random(), cum = 0;
@@ -1576,19 +1576,62 @@
                     t.sector !== 'ad' && t.id !== 'player'
                 );
                 // ランダムに5〜10社選ぶ
-                let numTargets = 5 + Math.floor(Math.random() * 6);
+                let numTargets = 7 + Math.floor(Math.random() * 4); // 7〜10社
                 let shuffled = targets.sort(() => 0.5 - Math.random()).slice(0, numTargets);
                 let perStock = Math.floor(investable / numTargets);
+                let acquiredCount = 0;
                 shuffled.forEach(tgt => {
                     let shares = Math.floor(perStock / Math.max(1, tgt.stockPrice));
-                    if (shares > 0 && shares <= tgt.shares * 0.15) { // 最大15%まで
-                        sogoCo.shareholders[tgt.id] = (sogoCo.shareholders[tgt.id] || 0) + shares;
-                        sogoCo.cash -= shares * tgt.stockPrice;
+                    let maxShares = Math.floor(tgt.shares * 0.18); // 18%まで緩和
+                    let actualShares = Math.min(shares, maxShares);
+                    if (actualShares > 0 && sogoCo.cash >= actualShares * tgt.stockPrice) {
+                        tgt.shareholders[sogoCo.id] = (tgt.shareholders[sogoCo.id] || 0) + actualShares;
+                        sogoCo.cash -= actualShares * tgt.stockPrice;
+                        acquiredCount++;
                     }
                 });
+                // 最低5社保証 - 足りない場合は追加購入
+                if (acquiredCount < 5) {
+                    let remaining = targets.filter(t => !(t.shareholders[sogoCo.id] > 0)).sort(() => 0.5 - Math.random());
+                    remaining.slice(0, 5 - acquiredCount).forEach(tgt => {
+                        let minShares = Math.max(1, Math.floor(tgt.shares * 0.02));
+                        if (sogoCo.cash >= minShares * tgt.stockPrice) {
+                            tgt.shareholders[sogoCo.id] = minShares;
+                            sogoCo.cash -= minShares * tgt.stockPrice;
+                        }
+                    });
+                }
             });
 
             buildCapitalChain();
+
+            // 証券会社(sogo)に初期子会社1社を付与
+            companies.filter(c => c.sector === 'sogo' && !c.isBankrupt).forEach(sogoCo => {
+                let candidates = companies.filter(t =>
+                    t.id !== sogoCo.id && !t.parent && t.isPublic && !t.isBankrupt &&
+                    t.sector !== 'ad' && t.id !== 'player' &&
+                    t.marketCap <= sogoCo.marketCap * 0.8
+                );
+                if (candidates.length > 0) {
+                    // 最も時価総額が小さい企業を選んで確実に取得
+                    let sub = candidates.sort((a, b) => a.marketCap - b.marketCap)[0];
+                    // 51%株式を簿価（時価の50%）で取得（ゲーム開始時の特別措置）
+                    let subShares = Math.floor(sub.shares * 0.51);
+                    let cost = Math.floor(subShares * sub.stockPrice * 0.50); // 50%ディスカウント
+                    if (sogoCo.cash >= cost) {
+                        sogoCo.cash -= cost;
+                        sub.shareholders[sogoCo.id] = subShares;
+                        sub.parent = sogoCo.id;
+                        sub.name = `[${sogoCo.name.replace(/\[.*?\]\s*/, '').slice(0, 4)}傘下] ${sub.name.replace(/\[.*?\]\s*/, '')}`;
+                    } else {
+                        // それでも足りない場合は強制付与（ゲームバランス用）
+                        sub.shareholders[sogoCo.id] = subShares;
+                        sub.parent = sogoCo.id;
+                        sub.name = `[${sogoCo.name.replace(/\[.*?\]\s*/, '').slice(0, 4)}傘下] ${sub.name.replace(/\[.*?\]\s*/, '')}`;
+                    }
+                }
+            });
+
             companies.forEach(c => stockHistory.datasets[c.id] = [c.stockPrice]);
             updateDashboard();
             addLog("持株会社を設立しました。世界238社の超巨大経済圏に挑みましょう。", "normal", "自社");
@@ -1681,7 +1724,9 @@
         };
 
         window.addLog = function (msg, type = 'normal', category = '総合') {
-            let thisWeekStr = `${2020 + Math.floor((week - 1) / 48)}年 ${Math.floor(((week - 1) % 48) / 4) + 1}月 ${((week - 1) % 4) + 1}週`;
+            // week++が週次処理の最初に来るため、ログ記録時は1引いた週番号を使う
+            let _logWeek = Math.max(1, week - 1);
+            let thisWeekStr = `${2020 + Math.floor((_logWeek - 1) / 48)}年 ${Math.floor(((_logWeek - 1) % 48) / 4) + 1}月 ${((_logWeek - 1) % 4) + 1}週`;
             window.logHistory.unshift({ week: thisWeekStr, msg: msg, type: type, category: category });
             if (window.logHistory.length > 500) window.logHistory.pop();
             if (document.getElementById('view-news')?.classList.contains('active')) {
@@ -2136,7 +2181,7 @@
                         let targetStores = 2 - c.stores.length;
                         for (let i = 0; i < targetStores; i++) {
                             let props = []; Object.keys(globalNetworkData).forEach(rk => { globalNetworkData[rk].districts.forEach((dist) => { dist.properties.forEach((prop, pIdx) => { if (prop.coffeeTenant === null) props.push({ rk, distName: dist.name, prop, pIdx }); }); }); });
-                            if (props.length > 0) { let t = props[Math.floor(Math.random() * props.length)]; let _aiInitCost = t.prop.rent * 2; t.prop.coffeeTenant = 2; let s = new Store(`[${t.distName}] ${t.prop.type}`, t.prop.rent, t.prop.traffic, t.prop.owner, t.prop.id, t.rk, t.distName, t.pIdx); s.price = 850; if (Math.random() < 0.3 && window.managerTypes) { s.hasManager = true; s.managerData = window.managerTypes[Math.floor(Math.random() * window.managerTypes.length)]; } c.stores.push(s); if (typeof window.payStoreBuildRoyalty === 'function') window.payStoreBuildRoyalty(c, _aiInitCost); }
+                            if (props.length > 0) { let t = props[Math.floor(Math.random() * props.length)]; let _aiInitCost = t.prop.rent * 2; t.prop.coffeeTenant = 2; let s = new Store(`[${t.distName}] ${t.prop.type}`, t.prop.rent, t.prop.traffic, t.prop.owner, t.prop.id, t.rk, t.distName, t.pIdx); s.price = 1200; if (Math.random() < 0.3 && window.managerTypes) { s.hasManager = true; s.managerData = window.managerTypes[Math.floor(Math.random() * window.managerTypes.length)]; } c.stores.push(s); if (typeof window.payStoreBuildRoyalty === 'function') window.payStoreBuildRoyalty(c, _aiInitCost); }
                             // AIメニュー星初期化
                             if (!c.menuStars) c.menuStars = {};
                             if (!c.menuRenewCount) c.menuRenewCount = {};
@@ -2481,21 +2526,21 @@
 
             // 🚚 通常のインフラ経費処理（国別対応）
             if (p.contracts) {
-                const _cMapInfra = { 'TOKYO':'JP','OSAKA':'JP','USA':'USA','CHINA':'CHINA','UK':'UK','KOREA':'KOREA','AUSTRALIA':'AUS','CANADA':'CAN','FRANCE':'FRA','GERMANY':'GER','INDIA':'IND' };
+                const _cMapInfra = { 'TOKYO': 'JP', 'OSAKA': 'JP', 'USA': 'USA', 'CHINA': 'CHINA', 'UK': 'UK', 'KOREA': 'KOREA', 'AUSTRALIA': 'AUS', 'CANADA': 'CAN', 'FRANCE': 'FRA', 'GERMANY': 'GER', 'INDIA': 'IND' };
                 // 国別IT・物流費用（logByCountry/itByCountry優先、なければglobalを使用）
                 let _infraProcessed = {};
                 p.stores.forEach(st => {
                     let country = _cMapInfra[st.regionKey] || 'JP';
                     if (_infraProcessed[country]) return; _infraProcessed[country] = true;
-                    let storesInCountry = p.stores.filter(s => (_cMapInfra[s.regionKey]||'JP') === country).length;
-                    [['logByCountry','log','logistics'],['itByCountry','it','it']].forEach(([byKey,secKey,globalKey]) => {
+                    let storesInCountry = p.stores.filter(s => (_cMapInfra[s.regionKey] || 'JP') === country).length;
+                    [['logByCountry', 'log', 'logistics'], ['itByCountry', 'it', 'it']].forEach(([byKey, secKey, globalKey]) => {
                         let coId = (p.contracts[byKey]?.[country]) || p.contracts[globalKey];
                         let contractor = coId ? companies.find(c => c.id === coId && !c.isBankrupt) : null;
                         let traits = window.getContractTraits ? window.getContractTraits(contractor) : { cost: 50000 };
                         let cost = traits.cost * storesInCountry;
                         if (contractor && cost > 0) {
-                            if (contractor.parent) { contractor.cash += cost; contractor.qNet = (contractor.qNet||0)+cost; if (contractor.parent==='player') totalInfraSaved += cost; }
-                            else { p.cash -= cost; contractor.cash += cost; contractor.qNet = (contractor.qNet||0)+cost; contractor.lastRevenue=(contractor.lastRevenue||0)+cost; contractor.lastExpense=(contractor.lastExpense||0)+Math.floor(cost*0.45); contractor.lastProfit=contractor.lastRevenue-contractor.lastExpense; totalInfraPaid += cost; pExp += cost; }
+                            if (contractor.parent) { contractor.cash += cost; contractor.qNet = (contractor.qNet || 0) + cost; if (contractor.parent === 'player') totalInfraSaved += cost; }
+                            else { p.cash -= cost; contractor.cash += cost; contractor.qNet = (contractor.qNet || 0) + cost; contractor.lastRevenue = (contractor.lastRevenue || 0) + cost; contractor.lastExpense = (contractor.lastExpense || 0) + Math.floor(cost * 0.45); contractor.lastProfit = contractor.lastRevenue - contractor.lastExpense; totalInfraPaid += cost; pExp += cost; }
                         }
                     });
                 });
@@ -2651,12 +2696,12 @@
                             let shortfall = totalReturn - canPay;
                             totalReturn = canPay + td.amount; // 利息はカットして元本優先
                             if (shortfall > td.amount * 0.1) {
-                                addLog(`【銀行流動性危機】${b.name.replace(/\[.*?\]\s*/,'')} が定期預金の満期支払いに一部不足！`, 'alert', '経済');
+                                addLog(`【銀行流動性危機】${b.name.replace(/\[.*?\]\s*/, '')} が定期預金の満期支払いに一部不足！`, 'alert', '経済');
                                 // 取り付け騒ぎイベントのトリガーフラグ
                                 b._liquidityStress = (b._liquidityStress || 0) + 1;
                                 if (b._liquidityStress >= 3 && !window._sectorCrisis?.pending) {
                                     window._sectorCrisis = window._sectorCrisis || {};
-                                    window._sectorCrisis.pending = { ...sectorCrisisEvents.find(e=>e.sector==='bank'), hintWeek: week, triggerWeek: week + 1 };
+                                    window._sectorCrisis.pending = { ...sectorCrisisEvents.find(e => e.sector === 'bank'), hintWeek: week, triggerWeek: week + 1 };
                                     addLog(`【危機予兆】銀行業界の流動性不安が表面化しはじめている…`, 'warning', 'ニュース');
                                 }
                             }
@@ -2701,7 +2746,7 @@
                                     ...sectorCrisisEvents.find(e => e.sector === 'bank'),
                                     hintWeek: week, triggerWeek: week + 1
                                 };
-                                addLog(`【流動性警告】${c.name.replace(/\[.*?\]\s*/,'')} の流動性比率が危険水準（${(liquidityRatio*100).toFixed(1)}%）に低下。取り付けリスクが高まっている。`, 'alert', '経済');
+                                addLog(`【流動性警告】${c.name.replace(/\[.*?\]\s*/, '')} の流動性比率が危険水準（${(liquidityRatio * 100).toFixed(1)}%）に低下。取り付けリスクが高まっている。`, 'alert', '経済');
                             }
                         } else {
                             c._liquidityStress = Math.max(0, (c._liquidityStress || 0) - 1);
@@ -2774,7 +2819,7 @@
 
                     // 【段階1.5】cashが少ない → まず普通預金から引き出す
                     if (c.cash < 0 && c.sector !== 'bank' && c.deposits) {
-                        let _depositTotal = Object.values(c.deposits).reduce((s,v)=>s+v,0);
+                        let _depositTotal = Object.values(c.deposits).reduce((s, v) => s + v, 0);
                         if (_depositTotal > 0) {
                             for (let _bid in c.deposits) {
                                 if (c.cash >= 0) break;
@@ -2813,16 +2858,16 @@
 
                     // 【段階3】cashがひどくマイナス → 保有株を売って現金化
                     if (c.cash < -30000000 && c.sector !== 'bank') {
-                        let portfolio = companies.filter(t => t.id !== c.id && (c.shareholders[t.id] || 0) > 0 && t.isPublic);
+                        let portfolio = companies.filter(t => t.id !== c.id && (t.shareholders[c.id] || 0) > 0 && t.isPublic);
                         if (portfolio.length > 0) {
                             // 最も評価額が高い銘柄から売る
-                            portfolio.sort((a, b) => (b.stockPrice * (c.shareholders[b.id] || 0)) - (a.stockPrice * (c.shareholders[a.id] || 0)));
+                            portfolio.sort((a, b) => (b.stockPrice * (b.shareholders[c.id] || 0)) - (a.stockPrice * (a.shareholders[c.id] || 0)));
                             let sell = portfolio[0];
-                            let sellShares = Math.floor((c.shareholders[sell.id] || 0) * 0.5); // 半分売る
+                            let sellShares = Math.floor((sell.shareholders[c.id] || 0) * 0.5); // 半分売る
                             if (sellShares > 0) {
                                 let proceeds = sell.stockPrice * sellShares;
                                 c.cash += proceeds;
-                                if ((c.shareholders[sell.id] || 0) >= sellShares) c.shareholders[sell.id] = (c.shareholders[sell.id] || 0) - sellShares;
+                                if ((sell.shareholders[c.id] || 0) >= sellShares) sell.shareholders[c.id] = (sell.shareholders[c.id] || 0) - sellShares;
                             }
                         }
                     }
@@ -2861,33 +2906,33 @@
                     if (_prof) {
                         // Aggressive: 借入して積極拡大（4週ごと・借入余力があれば）
                         if (c.personality === 'Aggressive' && week % 4 === 0 && c.sector === 'coffee') {
-                            let totalDebt = Object.values(c.bankDebts||{}).reduce((s,v)=>s+v,0);
+                            let totalDebt = Object.values(c.bankDebts || {}).reduce((s, v) => s + v, 0);
                             let debtRatio = totalDebt / Math.max(1, c.marketCap);
                             if (debtRatio < _prof.debtTolerance && c.cash < c.marketCap * 0.2) {
-                                let banks = companies.filter(b => b.sector==='bank' && !b.isBankrupt && b.cash > 50000000);
+                                let banks = companies.filter(b => b.sector === 'bank' && !b.isBankrupt && b.cash > 50000000);
                                 if (banks.length > 0) {
-                                    let lender = banks.reduce((a,b) => (b.loanRate||0.005)<(a.loanRate||0.005)?b:a);
+                                    let lender = banks.reduce((a, b) => (b.loanRate || 0.005) < (a.loanRate || 0.005) ? b : a);
                                     let borrow = Math.floor(c.marketCap * 0.10);
                                     c.cash += borrow; lender.cash -= borrow;
                                     if (!c.bankDebts) c.bankDebts = {};
-                                    c.bankDebts[lender.id] = (c.bankDebts[lender.id]||0) + borrow;
+                                    c.bankDebts[lender.id] = (c.bankDebts[lender.id] || 0) + borrow;
                                 }
                             }
                         }
                         // Greedy: 四半期ごとに配当率を自動調整（高配当維持）
                         if (c.personality === 'Greedy' && week % 13 === 0) {
-                            if (c.lastQProfit > 0) c.dividendRate = Math.min(85, (c.dividendRate||50) + 5);
+                            if (c.lastQProfit > 0) c.dividendRate = Math.min(85, (c.dividendRate || 50) + 5);
                         }
                         // Conservative: 借金があれば積極返済（通常の5%返済に加えて追加返済）
                         if (c.personality === 'Conservative' && c.cash > c.marketCap * 0.3) {
-                            let totalDebt = Object.values(c.bankDebts||{}).reduce((s,v)=>s+v,0);
+                            let totalDebt = Object.values(c.bankDebts || {}).reduce((s, v) => s + v, 0);
                             if (totalDebt > 0) {
                                 let extraRepay = Math.min(Math.floor(totalDebt * 0.03), Math.floor(c.cash * 0.1));
                                 for (let bId in c.bankDebts) {
                                     if (extraRepay <= 0) break;
                                     let repay = Math.min(c.bankDebts[bId], extraRepay);
                                     let bank = companies.find(b => b.id === bId);
-                                    if (bank) { c.cash -= repay; bank.cash += repay; bank.qNet = (bank.qNet||0)+repay; }
+                                    if (bank) { c.cash -= repay; bank.cash += repay; bank.qNet = (bank.qNet || 0) + repay; }
                                     c.bankDebts[bId] -= repay; extraRepay -= repay;
                                     if (c.bankDebts[bId] <= 0) delete c.bankDebts[bId];
                                 }
@@ -2896,7 +2941,7 @@
                         // Turnaround: コスト削減（人員削減・不採算店舗の早期撤退）
                         if (c.personality === 'Turnaround' && c.sector === 'coffee') {
                             c.stores.forEach(s => {
-                                if ((s._lossWeeks||0) >= 3) { // 通常6週のところ3週で撤退
+                                if ((s._lossWeeks || 0) >= 3) { // 通常6週のところ3週で撤退
                                     s._lossWeeks = 6;
                                 }
                             });
@@ -2906,7 +2951,7 @@
                             let emptyProps = [];
                             Object.keys(globalNetworkData).forEach(rk => {
                                 globalNetworkData[rk].districts.forEach(d => {
-                                    d.properties.forEach((p, idx) => { if (p.coffeeTenant === null) emptyProps.push({rk, d, p, idx}); });
+                                    d.properties.forEach((p, idx) => { if (p.coffeeTenant === null) emptyProps.push({ rk, d, p, idx }); });
                                 });
                             });
                             if (emptyProps.length > 0) {
@@ -3043,7 +3088,7 @@
                         if (sat >= 75) {
                             // 高満足: 常連増加（店長育成statボーナス）
                             let growthBonus = s.hasManager && s.managerData?.stats
-                                ? (1 + s.managerData.stats[2] * 0.1) * (1 + ((s.managerLevel||1)-1) * 0.15) : 1;
+                                ? (1 + s.managerData.stats[2] * 0.1) * (1 + ((s.managerLevel || 1) - 1) * 0.15) : 1;
                             s.regulars = Math.min(maxRegulars, Math.floor((s.regulars || 0) + Math.ceil((s.traffic * 0.005) * growthBonus)));
                         } else if (sat >= 50) {
                             s.regulars = Math.min(maxRegulars, Math.floor((s.regulars || 0) + 1));
@@ -3080,7 +3125,7 @@
                             ? Math.floor(rev * Math.max(0.15, baseCogsRate))
                             : Math.floor(rev * 0.15);
                         // 国別特需ボーナス適用
-                        const _cMapBonus = {'TOKYO':'JP','OSAKA':'JP','USA':'USA','CHINA':'CHINA','UK':'UK','KOREA':'KOREA','AUSTRALIA':'AUS','CANADA':'CAN','FRANCE':'FRA','GERMANY':'GER','INDIA':'IND'};
+                        const _cMapBonus = { 'TOKYO': 'JP', 'OSAKA': 'JP', 'USA': 'USA', 'CHINA': 'CHINA', 'UK': 'UK', 'KOREA': 'KOREA', 'AUSTRALIA': 'AUS', 'CANADA': 'CAN', 'FRANCE': 'FRA', 'GERMANY': 'GER', 'INDIA': 'IND' };
                         let _storeCountry = _cMapBonus[s.regionKey] || 'JP';
                         let _bonusEntry = window._countryBonus && window._countryBonus[_storeCountry];
                         if (_bonusEntry && week <= _bonusEntry.until) {
@@ -3092,9 +3137,9 @@
                         // 💡 修正：未定義エラー防止
                         if (c.id === 'player') {
                             // Lv強化: Lv5で集客+30%、利益率+25%（旧: Lv5で+10%）
-                        let _mgrLv = (s.managerLevel || 1);
-                        let mgrMarginBonus = (s.hasManager && s.managerData)
-                            ? (s.managerData.bonus.margin + (_mgrLv - 1) * 0.05) : 1.0;
+                            let _mgrLv = (s.managerLevel || 1);
+                            let mgrMarginBonus = (s.hasManager && s.managerData)
+                                ? (s.managerData.bonus.margin + (_mgrLv - 1) * 0.05) : 1.0;
                             if (typeof techRoaster !== 'undefined' && techRoaster && sp > 0) sp *= 1.2;
                             sp *= (syn.margin * mgrMarginBonus);
                             pRev += rev;
@@ -3292,11 +3337,10 @@
 
                         // 3. 保有株からの週次配当収入
                         let _sogoDivIncome = 0;
-                        Object.keys(c.shareholders || {}).forEach(sid => {
-                            if (sid === c.id || sid === 'player') return;
-                            let holdCo = companies.find(cx => cx.id === sid);
-                            let holding = c.shareholders[sid] || 0;
-                            if (holdCo && holding > 0 && holdCo.dividendRate > 0 && holdCo.lastQProfit > 0) {
+                        companies.forEach(holdCo => {
+                            if (holdCo.id === c.id) return;
+                            let holding = holdCo.shareholders[c.id] || 0;
+                            if (holding > 0 && holdCo.dividendRate > 0 && holdCo.lastQProfit > 0) {
                                 _sogoDivIncome += Math.floor(holdCo.lastQProfit * (holdCo.dividendRate / 100) / holdCo.shares * holding / 13);
                             }
                         });
@@ -3307,17 +3351,14 @@
                             // 保有銘柄の評価益の3%を実現益として計上
                             let portfolioVal = 0;
                             companies.forEach(tgt => {
-                                let holding = c.shareholders[tgt.id] || 0;
+                                let holding = tgt.shareholders[c.id] || 0;
                                 if (holding > 0 && tgt.stockPrice > 0) portfolioVal += holding * tgt.stockPrice;
                             });
                             _sogoSale = Math.floor(portfolioVal * 0.003 * baseMult);
                         }
 
                         // 子会社がなく保有株もない場合は収益ゼロ（架空利益を完全排除）
-                        let _sogoHasPortfolio = Object.keys(c.shareholders || {}).some(sid => {
-                            let held = c.shareholders[sid] || 0;
-                            return held > 0 && sid !== c.id;
-                        });
+                        let _sogoHasPortfolio = companies.some(t => t.id !== c.id && (t.shareholders[c.id] || 0) > 0);
                         let _sogoHasSubs = companies.some(sub => sub.parent === c.id && !sub.isBankrupt);
 
                         if (!_sogoHasPortfolio && !_sogoHasSubs) {
@@ -3350,15 +3391,12 @@
                     // 株式評価益（保有株の時価上昇分の一部を利益計上）
                     let stockGain = 0;
                     if (c.shares > 0 && c.stockPrice > 0) {
-                        // 自社以外の株を保有している場合の推定評価益
-                        Object.keys(c.shareholders || {}).forEach(sid => {
-                            if (sid !== c.id && sid !== 'player') {
-                                let holding = c.shareholders[sid] || 0;
-                                let holdCo = companies.find(cx => cx.id === sid);
-                                if (holdCo && holding > 0 && Math.random() < 0.3) {
-                                    let divIncome = Math.floor(holdCo.stockPrice * holding * (holdCo.dividendRate || 20) / 100 / 48);
-                                    stockGain += divIncome;
-                                }
+                        companies.forEach(holdCo => {
+                            if (holdCo.id === c.id) return;
+                            let holding = holdCo.shareholders[c.id] || 0;
+                            if (holding > 0 && Math.random() < 0.3) {
+                                let divIncome = Math.floor(holdCo.stockPrice * holding * (holdCo.dividendRate || 20) / 100 / 48);
+                                stockGain += divIncome;
                             }
                         });
                     }
@@ -3531,11 +3569,10 @@
                         // 【追加】最終週に全資産を売却して現金化を試みる
                         if (c.cash < 0) {
                             let recoveredCash = 0;
-                            Object.keys(c.shareholders || {}).forEach(tgtId => {
-                                if (tgtId === c.id || tgtId === 'player') return;
-                                let shares = c.shareholders[tgtId] || 0;
-                                let tgtCo = companies.find(x => x.id === tgtId && !x.isBankrupt && x.stockPrice > 0);
-                                if (shares > 0 && tgtCo) {
+                            companies.forEach(tgtCo => {
+                                if (tgtCo.id === c.id || tgtCo.isBankrupt || tgtCo.stockPrice <= 0) return;
+                                let shares = tgtCo.shareholders[c.id] || 0;
+                                if (shares > 0) {
                                     recoveredCash += shares * tgtCo.stockPrice; c.cash += shares * tgtCo.stockPrice;
                                     tgtCo.shareholders[c.id] = 0;
                                 }
@@ -3639,8 +3676,8 @@
                             }
                             c.shareholders[buyer.id] = rescueShares;
                             // 傘下名を正しく付与
-                            let _rescuedCleanName = c.name.replace(/\[.*?\]\s*/g,'');
-                            let _buyerShort = buyer.name.replace(/\[.*?\]\s*/g,'').slice(0,4);
+                            let _rescuedCleanName = c.name.replace(/\[.*?\]\s*/g, '');
+                            let _buyerShort = buyer.name.replace(/\[.*?\]\s*/g, '').slice(0, 4);
                             c.name = `[${_buyerShort}傘下] ${_rescuedCleanName} [再建中]`;
                             addLog(`【救済買収】${_rescuedCleanName} が ${buyer.name.replace(/\[.*?\]\s*/, '')} に救済買収されました（55%取得・再建開始）。`, 'news', 'M&A');
                             delete c._bankruptProc; delete c._bankruptProcWeek;
@@ -3667,10 +3704,10 @@
                                     c.name = '👑 [自社傘下] ' + _reconName.replace(/\[.*?\]\s*/g, '');
                                 } else if (c.parent) {
                                     let _parentCo = companies.find(px => px.id === c.parent);
-                                    let _pName = _parentCo ? _parentCo.name.replace(/\[.*?\]\s*/g,'').slice(0,4) : '';
-                                    c.name = `[${_pName}傘下] ` + _reconName.replace(/\[.*?\]\s*/g,'');
+                                    let _pName = _parentCo ? _parentCo.name.replace(/\[.*?\]\s*/g, '').slice(0, 4) : '';
+                                    c.name = `[${_pName}傘下] ` + _reconName.replace(/\[.*?\]\s*/g, '');
                                 } else {
-                                    c.name = _reconName.replace(/\[.*?\]\s*/g,'');
+                                    c.name = _reconName.replace(/\[.*?\]\s*/g, '');
                                 }
                                 addLog(`【再建完了】${c.name.replace(/\[.*?\]\s*/, '')} の借金が完済されました！正式に傘下企業として稼働開始。`, 'success', 'M&A');
                             } else if (week % 4 === 0) {
@@ -3688,7 +3725,7 @@
                     if (_rebirthWeeks >= 12 && (c.lastQProfit || 0) > 0) {
                         let _cleanName = c.name.replace(/\s*\[再建中\]/g, '');
                         c.name = _cleanName;
-                        addLog(`【再建卒業】${_cleanName.replace(/\[.*?\]\s*/,'')} が12週間の黒字継続で再建を完了！`, 'success', 'M&A');
+                        addLog(`【再建卒業】${_cleanName.replace(/\[.*?\]\s*/, '')} が12週間の黒字継続で再建を完了！`, 'success', 'M&A');
                         delete c._rebirthStartWeek;
                     }
                 }
@@ -3764,7 +3801,7 @@
 
                             if (sharesToBuy > 0 && c.cash >= totalCost * 0.5) {
                                 // TOB宣言ニュースを必ず出す
-                                addLog(`【TOB宣言】${c.name.replace(/\[.*?\]\s*/,'')} が ${tgt.name.replace(/\[.*?\]\s*/,'')} に対して株式公開買付を宣言しました！（プレミアム +${premiumPct}% / 決着まで4週間）`, 'alert', 'M&A');
+                                addLog(`【TOB宣言】${c.name.replace(/\[.*?\]\s*/, '')} が ${tgt.name.replace(/\[.*?\]\s*/, '')} に対して株式公開買付を宣言しました！（プレミアム +${premiumPct}% / 決着まで4週間）`, 'alert', 'M&A');
                                 tgt.activeTOB_v2 = {
                                     bidder: c.id,
                                     price: premiumPrice,
@@ -3776,11 +3813,11 @@
                                 c._lastTOBWeek = week;
                                 // 広告代理店に手数料
                                 let _maNwsFee = Math.floor(totalCost * 0.005);
-                                let _maAdCo = companies.find(a => a.sector === 'ad' && !a.isBankrupt && (a.country === (c.country||'JP') || !a.country));
+                                let _maAdCo = companies.find(a => a.sector === 'ad' && !a.isBankrupt && (a.country === (c.country || 'JP') || !a.country));
                                 if (_maAdCo && _maNwsFee > 0 && c.cash >= _maNwsFee) {
                                     c.cash -= _maNwsFee; _maAdCo.cash += _maNwsFee;
-                                    _maAdCo.qNet = (_maAdCo.qNet||0) + _maNwsFee;
-                                    _maAdCo.lastRevenue = (_maAdCo.lastRevenue||0) + _maNwsFee;
+                                    _maAdCo.qNet = (_maAdCo.qNet || 0) + _maNwsFee;
+                                    _maAdCo.lastRevenue = (_maAdCo.lastRevenue || 0) + _maNwsFee;
                                 }
                             }
                         }
@@ -3805,19 +3842,19 @@
                     // 💹 【機関投資家特有】積極的株式取得（20%持分目標）+ 利益確定売り
                     if (c.sector === 'sogo' || c.sector === 'bank' || c.sector === 'finance') {
                         // 証券会社はポートフォリオが5社未満なら確率大幅UP
-                        let _portSize = Object.keys(c.shareholders || {}).filter(sid => (c.shareholders[sid]||0) > 0 && sid !== c.id).length;
+                        let _portSize = companies.filter(t => (t.shareholders[c.id] || 0) > 0 && t.id !== c.id).length;
                         let _buyProb = c.sector === 'sogo' ? ((_portSize < 5) ? 0.70 : 0.45) : 0.25;
                         // 20%未満の銘柄を優先買い増し（持分法収益獲得のため）
                         if (Math.random() < _buyProb && c.cash > 50000000) {
                             let underTarget = companies.filter(t =>
                                 t.id !== c.id && t.isPublic && !t.isBankrupt && t.id !== 'player' &&
-                                (c.shareholders[t.id] || 0) / Math.max(1, t.shares) < 0.20 &&
+                                (t.shareholders[c.id] || 0) / Math.max(1, t.shares) < 0.20 &&
                                 t.qNet > 0 // 利益出てる企業を狙う
                             );
                             if (underTarget.length > 0) {
                                 let tgt = underTarget.sort((a, b) => (b.qNet || 0) - (a.qNet || 0))[0];
                                 let need20pct = Math.floor(tgt.shares * 0.20);
-                                let nowHold = c.shareholders[tgt.id] || 0;
+                                let nowHold = tgt.shareholders[c.id] || 0;
                                 let buyShares = Math.min(
                                     Math.floor((need20pct - nowHold) * (0.3 + Math.random() * 0.5)),
                                     Math.floor(c.cash / (tgt.stockPrice || 100))
@@ -3825,7 +3862,7 @@
                                 if (buyShares > 0 && c.cash >= buyShares * tgt.stockPrice) {
                                     let cost = buyShares * tgt.stockPrice;
                                     c.cash -= cost;
-                                    c.shareholders[tgt.id] = nowHold + buyShares;
+                                    tgt.shareholders[c.id] = nowHold + buyShares;
                                     let newRatio = ((nowHold + buyShares) / tgt.shares * 100).toFixed(1);
                                     if (newRatio > 5) addLog(`【投資】${c.name.replace(/\[.*?\]\s*/, '')} が ${tgt.name.replace(/\[.*?\]\s*/, '')} を買い増し（${newRatio}%保有）`, 'normal', '市場');
                                 }
@@ -3836,14 +3873,14 @@
                             let portfolio = companies.filter(t => t.id !== c.id && t.isPublic && (t.shareholders[c.id] || 0) > 0);
                             if (portfolio.length > 0) {
                                 let pt = portfolio[Math.floor(Math.random() * portfolio.length)];
-                                let holdRatio = pt.shares > 0 ? (c.shareholders[pt.id] || 0) / pt.shares : 0;
+                                let holdRatio = pt.shares > 0 ? (pt.shareholders[c.id] || 0) / pt.shares : 0;
                                 // 20%超の余剰分だけ売る（20%はキープ）
                                 let sellAmt = holdRatio > 0.25
-                                    ? Math.floor((c.shareholders[pt.id] - Math.floor(pt.shares * 0.20)) * (Math.random() * 0.6 + 0.2))
-                                    : Math.floor((c.shareholders[pt.id] || 0) * (Math.random() * 0.3 + 0.1));
-                                if (sellAmt > 0 && (c.shareholders[pt.id] || 0) >= sellAmt) {
+                                    ? Math.floor((pt.shareholders[c.id] - Math.floor(pt.shares * 0.20)) * (Math.random() * 0.6 + 0.2))
+                                    : Math.floor((pt.shareholders[c.id] || 0) * (Math.random() * 0.3 + 0.1));
+                                if (sellAmt > 0 && (pt.shareholders[c.id] || 0) >= sellAmt) {
                                     let gain = sellAmt * pt.stockPrice;
-                                    c.shareholders[pt.id] = (c.shareholders[pt.id] || 0) - sellAmt;
+                                    pt.shareholders[c.id] = (pt.shareholders[c.id] || 0) - sellAmt;
                                     c.cash += gain;
                                     let _sogoGain = Math.floor(gain * 0.5);
                                     c.qNet = (c.qNet || 0) + _sogoGain;
@@ -3888,7 +3925,7 @@
                                     // 上位5株主かどうか判定
                                     let _allSH = Object.entries(target.shareholders || {})
                                         .filter(([id, sh]) => sh > 0)
-                                        .sort(([,a],[,b]) => b - a);
+                                        .sort(([, a], [, b]) => b - a);
                                     let _playerRank = _allSH.findIndex(([id]) => id === 'player');
                                     let _isTop5 = _playerRank >= 0 && _playerRank < 5;
 
@@ -4207,7 +4244,7 @@
             });
             // 年1回（52週ごと）、2カ国を特需に指定
             if (week > 1 && week % 52 === 0) {
-                const _allCountries = ['JP','USA','CHINA','UK','KOREA','AUS','CAN','FRA','GER','IND'];
+                const _allCountries = ['JP', 'USA', 'CHINA', 'UK', 'KOREA', 'AUS', 'CAN', 'FRA', 'GER', 'IND'];
                 let _available = _allCountries.filter(c => !window._countryBonus[c]);
                 let _chosen = _available.sort(() => 0.5 - Math.random()).slice(0, 2);
                 _chosen.forEach(country => {
@@ -4259,7 +4296,7 @@
                     // 破産判定
                     if (co.cash < 0 && Math.random() < 0.30) {
                         co._bankruptProc = true; co._bankruptProcWeek = week;
-                        addLog(`【危機】${co.name.replace(/\[.*?\]\s*/,'')} が業種崩壊の影響で破産申請！`, 'alert', 'M&A');
+                        addLog(`【危機】${co.name.replace(/\[.*?\]\s*/, '')} が業種崩壊の影響で破産申請！`, 'alert', 'M&A');
                     }
                 });
                 // プレイヤーの同業他社への軽微な波及（直接ダメージなし、株価のみ）
@@ -4334,8 +4371,8 @@
                             companies.forEach(function (co) {
                                 if (!co.stores) return;
                                 co.stores.forEach(function (st) {
-                                    if (st.regionKey === rk && dist && st.location === dist.name &&
-                                        dist.properties.indexOf(prop) === st.propIndex) {
+                                    if (st.regionKey === rk && d && st.location === d.name &&
+                                        d.properties.indexOf(prop) === st.propIndex) {
                                         st.rent = prop.rent;
                                     }
                                 });
@@ -4599,16 +4636,16 @@
                     // 大株主としてAIの定時総会に参加
                     let playerStake = c.shares > 0 ? (c.shareholders['player'] || 0) / c.shares : 0;
                     // 上位5株主チェック
-                    let _agmAllSH = Object.entries(c.shareholders || {}).filter(([,sh]) => sh > 0).sort(([,a],[,b]) => b-a);
+                    let _agmAllSH = Object.entries(c.shareholders || {}).filter(([, sh]) => sh > 0).sort(([, a], [, b]) => b - a);
                     let _agmRank = _agmAllSH.findIndex(([id]) => id === 'player');
                     let _agmTop5 = _agmRank >= 0 && _agmRank < 5;
                     if (c.id !== 'player' && (playerStake >= 0.05 || _agmTop5) && c.isPublic) {
                         // ── 経営陣タイプ定義 ──
                         const mgmtTypes = [
-                            { key: 'Aggressive', label: '⚡ 積極拡大型CEO', effect: '毎週借入・M&A積極化。利益率-10%だが成長速度↑', apply: (co) => { co.personality = 'Aggressive'; co.dividendRate = Math.max(5, (co.dividendRate||20)-10); } },
-                            { key: 'Conservative', label: '🛡️ 守備安定型CEO', effect: '借入拒否・配当安定。成長は鈍化するが安全', apply: (co) => { co.personality = 'Conservative'; co.dividendRate = Math.min(60, (co.dividendRate||20)+10); } },
-                            { key: 'Greedy', label: '💰 高配当優先型CEO', effect: '利益の80%を配当還元。内部留保は最低限', apply: (co) => { co.personality = 'Greedy'; co.dividendRate = Math.min(90, (co.dividendRate||20)+30); } },
-                            { key: 'Growth', label: '🚀 成長投資型CEO', effect: 'R&D・出店に積極投資。短期配当は減るが長期価値↑', apply: (co) => { co.personality = 'Balanced'; co.dividendRate = Math.max(0, (co.dividendRate||20)-15); } },
+                            { key: 'Aggressive', label: '⚡ 積極拡大型CEO', effect: '毎週借入・M&A積極化。利益率-10%だが成長速度↑', apply: (co) => { co.personality = 'Aggressive'; co.dividendRate = Math.max(5, (co.dividendRate || 20) - 10); } },
+                            { key: 'Conservative', label: '🛡️ 守備安定型CEO', effect: '借入拒否・配当安定。成長は鈍化するが安全', apply: (co) => { co.personality = 'Conservative'; co.dividendRate = Math.min(60, (co.dividendRate || 20) + 10); } },
+                            { key: 'Greedy', label: '💰 高配当優先型CEO', effect: '利益の80%を配当還元。内部留保は最低限', apply: (co) => { co.personality = 'Greedy'; co.dividendRate = Math.min(90, (co.dividendRate || 20) + 30); } },
+                            { key: 'Growth', label: '🚀 成長投資型CEO', effect: 'R&D・出店に積極投資。短期配当は減るが長期価値↑', apply: (co) => { co.personality = 'Balanced'; co.dividendRate = Math.max(0, (co.dividendRate || 20) - 15); } },
                         ];
                         // 現在の経営陣タイプを除外
                         let availMgmt = mgmtTypes.filter(m => m.key !== c.personality);
@@ -4617,26 +4654,26 @@
                             // ① 増配
                             {
                                 title: `💰 増配要求（配当性向+25%）`,
-                                desc: `内部留保が過剰です。配当性向を${(c.dividendRate||0)}% → ${Math.min(100,(c.dividendRate||0)+25)}% に引き上げるよう求めます。`,
-                                action: () => { c.dividendRate = Math.min(100, (c.dividendRate||0)+25); addLog(`【総会可決】${c.name.replace(/\[.*?\]\s*/,'')} が増配。配当性向 ${c.dividendRate}%。`, 'success', '経済'); }
+                                desc: `内部留保が過剰です。配当性向を${(c.dividendRate || 0)}% → ${Math.min(100, (c.dividendRate || 0) + 25)}% に引き上げるよう求めます。`,
+                                action: () => { c.dividendRate = Math.min(100, (c.dividendRate || 0) + 25); addLog(`【総会可決】${c.name.replace(/\[.*?\]\s*/, '')} が増配。配当性向 ${c.dividendRate}%。`, 'success', '経済'); }
                             },
                             // ② 自社株買い
                             {
                                 title: `📈 自社株買い（発行株の10%）`,
                                 desc: `株価下支えのため、発行済み株式の10%を市場から買い戻します。1株価値・EPSが向上します。`,
                                 action: () => {
-                                    let buybackShares = Math.floor((c.shares||10000) * 0.10);
-                                    let cost = buybackShares * (c.stockPrice||100);
+                                    let buybackShares = Math.floor((c.shares || 10000) * 0.10);
+                                    let cost = buybackShares * (c.stockPrice || 100);
                                     if (c.cash >= cost) {
                                         c.cash -= cost;
                                         // 市場株を消却（各株主から按分で減少）
-                                        c.shares = Math.max(1, (c.shares||10000) - buybackShares);
+                                        c.shares = Math.max(1, (c.shares || 10000) - buybackShares);
                                         for (let sid in c.shareholders) {
-                                            c.shareholders[sid] = Math.floor((c.shareholders[sid]||0) * 0.90);
+                                            c.shareholders[sid] = Math.floor((c.shareholders[sid] || 0) * 0.90);
                                         }
                                         // 株価上昇（需給改善）
-                                        c.stockPrice = Math.floor((c.stockPrice||100) * 1.08);
-                                        addLog(`【自社株買い】${c.name.replace(/\[.*?\]\s*/,'')} が ${buybackShares.toLocaleString()}株を買い戻し。株価↑ ¥${c.stockPrice.toLocaleString()}`, 'success', 'M&A');
+                                        c.stockPrice = Math.floor((c.stockPrice || 100) * 1.08);
+                                        addLog(`【自社株買い】${c.name.replace(/\[.*?\]\s*/, '')} が ${buybackShares.toLocaleString()}株を買い戻し。株価↑ ¥${c.stockPrice.toLocaleString()}`, 'success', 'M&A');
                                     }
                                 }
                             },
@@ -4645,18 +4682,18 @@
                                 title: `📊 増資（発行株の20%増）`,
                                 desc: `事業拡大のため新株を発行し資金調達。既存株主は希薄化しますが、企業の成長余力が高まります。${c.parent && c.parent !== 'player' ? '※ 親会社の承認が必要です。' : ''}`,
                                 action: () => {
-                                    let newShares = Math.floor((c.shares||10000) * 0.20);
-                                    let issuePrice = Math.floor((c.stockPrice||100) * 0.95);
+                                    let newShares = Math.floor((c.shares || 10000) * 0.20);
+                                    let issuePrice = Math.floor((c.stockPrice || 100) * 0.95);
                                     // 親会社がいる場合は承認チェック
                                     if (c.parent && c.parent !== 'player') {
                                         let parentCo = companies.find(x => x.id === c.parent);
                                         let parentApprove = parentCo ? (Math.random() < 0.6) : false;
-                                        if (!parentApprove) { addLog(`【増資否決】${c.name.replace(/\[.*?\]\s*/,'')} の増資は親会社 ${parentCo?.name.replace(/\[.*?\]\s*/,'')||'?'} の反対で否決。`, 'warning', 'M&A'); return; }
+                                        if (!parentApprove) { addLog(`【増資否決】${c.name.replace(/\[.*?\]\s*/, '')} の増資は親会社 ${parentCo?.name.replace(/\[.*?\]\s*/, '') || '?'} の反対で否決。`, 'warning', 'M&A'); return; }
                                     }
-                                    c.shares = (c.shares||10000) + newShares;
+                                    c.shares = (c.shares || 10000) + newShares;
                                     c.cash += newShares * issuePrice;
-                                    c.stockPrice = Math.max(10, Math.floor((c.stockPrice||100) * 0.85)); // 希薄化で株価下落
-                                    addLog(`【増資】${c.name.replace(/\[.*?\]\s*/,'')} が ${newShares.toLocaleString()}株を新規発行。資金 ¥${Math.floor(newShares*issuePrice/10000).toLocaleString()}万 調達。株価↓`, 'normal', 'M&A');
+                                    c.stockPrice = Math.max(10, Math.floor((c.stockPrice || 100) * 0.85)); // 希薄化で株価下落
+                                    addLog(`【増資】${c.name.replace(/\[.*?\]\s*/, '')} が ${newShares.toLocaleString()}株を新規発行。資金 ¥${Math.floor(newShares * issuePrice / 10000).toLocaleString()}万 調達。株価↓`, 'normal', 'M&A');
                                 }
                             },
                             // ④ 子会社売却
@@ -4665,16 +4702,16 @@
                                 desc: `保有する子会社を市場に売却し、現金を得ます。売却先は最高入札AI企業が選ばれます。`,
                                 action: () => {
                                     let subs = companies.filter(sub => sub.parent === c.id && !sub.isBankrupt);
-                                    if (subs.length === 0) { addLog(`【売却不可】${c.name.replace(/\[.*?\]\s*/,'')} には売却できる子会社がありません。`, 'warning', 'M&A'); return; }
+                                    if (subs.length === 0) { addLog(`【売却不可】${c.name.replace(/\[.*?\]\s*/, '')} には売却できる子会社がありません。`, 'warning', 'M&A'); return; }
                                     let target = subs[Math.floor(Math.random() * subs.length)];
                                     let bidders = companies.filter(b => !b.isBankrupt && b.id !== c.id && b.id !== 'player' && b.cash >= target.marketCap * 0.5);
-                                    if (bidders.length === 0) { addLog(`【売却不成立】${target.name.replace(/\[.*?\]\s*/,'')} の買い手が見つかりませんでした。`, 'warning', 'M&A'); return; }
-                                    let buyer = bidders.reduce((a,b) => b.cash > a.cash ? b : a);
+                                    if (bidders.length === 0) { addLog(`【売却不成立】${target.name.replace(/\[.*?\]\s*/, '')} の買い手が見つかりませんでした。`, 'warning', 'M&A'); return; }
+                                    let buyer = bidders.reduce((a, b) => b.cash > a.cash ? b : a);
                                     let price = Math.floor(target.marketCap * (0.9 + Math.random() * 0.4));
                                     c.cash += price; buyer.cash -= price;
                                     target.parent = buyer.id;
-                                    target.name = `[${buyer.name.replace(/\[.*?\]\s*/,'').slice(0,4)}傘下] ${target.name.replace(/\[.*?\]\s*/,'')}`;
-                                    addLog(`【子会社売却】${c.name.replace(/\[.*?\]\s*/,'')} が ${target.name.replace(/\[.*?\]\s*/,'')} を ${buyer.name.replace(/\[.*?\]\s*/,'')} に ¥${Math.floor(price/10000).toLocaleString()}万 で売却。`, 'success', 'M&A');
+                                    target.name = `[${buyer.name.replace(/\[.*?\]\s*/, '').slice(0, 4)}傘下] ${target.name.replace(/\[.*?\]\s*/, '')}`;
+                                    addLog(`【子会社売却】${c.name.replace(/\[.*?\]\s*/, '')} が ${target.name.replace(/\[.*?\]\s*/, '')} を ${buyer.name.replace(/\[.*?\]\s*/, '')} に ¥${Math.floor(price / 10000).toLocaleString()}万 で売却。`, 'success', 'M&A');
                                 }
                             },
                             // ⑤ 買収提案
@@ -4683,22 +4720,22 @@
                                 desc: `成長加速のため、同業他社への買収TOBを取締役会に提案します。`,
                                 action: () => {
                                     let targets = companies.filter(t => t.id !== c.id && !t.isBankrupt && !t.parent && t.isPublic && t.sector === c.sector && t.marketCap < c.marketCap * 1.5);
-                                    if (targets.length === 0) { addLog(`【提案不成立】${c.name.replace(/\[.*?\]\s*/,'')} に適切な買収ターゲットが見つかりません。`, 'warning', 'M&A'); return; }
-                                    let tgt = targets.sort((a,b) => (b.qNet||0)-(a.qNet||0))[0];
+                                    if (targets.length === 0) { addLog(`【提案不成立】${c.name.replace(/\[.*?\]\s*/, '')} に適切な買収ターゲットが見つかりません。`, 'warning', 'M&A'); return; }
+                                    let tgt = targets.sort((a, b) => (b.qNet || 0) - (a.qNet || 0))[0];
                                     let prem = 20 + Math.floor(Math.random() * 20);
-                                    let price = Math.floor(tgt.stockPrice * (1 + prem/100));
+                                    let price = Math.floor(tgt.stockPrice * (1 + prem / 100));
                                     let sharesNeeded = Math.floor(tgt.shares * 0.51);
                                     if (!tgt.activeTOB_v2) {
                                         tgt.activeTOB_v2 = { bidder: c.id, price, targetShares: sharesNeeded, startWeek: week, deadline: week + 4, premiumPct: prem };
-                                        addLog(`【TOB宣言】総会可決により ${c.name.replace(/\[.*?\]\s*/,'')} が ${tgt.name.replace(/\[.*?\]\s*/,'')} に TOB宣言！（プレミアム +${prem}%）`, 'alert', 'M&A');
+                                        addLog(`【TOB宣言】総会可決により ${c.name.replace(/\[.*?\]\s*/, '')} が ${tgt.name.replace(/\[.*?\]\s*/, '')} に TOB宣言！（プレミアム +${prem}%）`, 'alert', 'M&A');
                                     }
                                 }
                             },
                             // ⑥ 経営陣刷新（タイプ選択）
-                            ...availMgmt.slice(0,2).map(mt => ({
+                            ...availMgmt.slice(0, 2).map(mt => ({
                                 title: `👔 経営陣刷新 → ${mt.label}`,
                                 desc: `現CEO を解任し、${mt.label} を就任させます。効果: ${mt.effect}`,
-                                action: () => { mt.apply(c); addLog(`【経営刷新】${c.name.replace(/\[.*?\]\s*/,'')} が ${mt.label} 体制に移行。`, 'warning', '経済'); }
+                                action: () => { mt.apply(c); addLog(`【経営刷新】${c.name.replace(/\[.*?\]\s*/, '')} が ${mt.label} 体制に移行。`, 'warning', '経済'); }
                             }))
                         ];
 
@@ -4818,7 +4855,9 @@
 
                         window.stockPriceHistory = window.stockPriceHistory || [companies[0].stockPrice]; window.stockPriceHistory.push(companies[0].stockPrice); if (typeof updateCharts === 'function') setTimeout(updateCharts, 50);
                         updateDashboard(); if (typeof renderNewspaper === 'function') renderNewspaper(); if (document.getElementById('view-market').classList.contains('active')) updateMarket();
-                        let thisWeekStr = `${2020 + Math.floor((week - 2) / 48)}年 ${Math.floor(((week - 2) % 48) / 4) + 1}月 ${((week - 2) % 4) + 1}週`;
+                        // week++後にログはweek-1で記録される。addLogは(_logWeek-1)=(week-2)をインデックスに使うので合わせる
+                        let _sw = Math.max(0, week - 2);
+                        let thisWeekStr = `${2020 + Math.floor(_sw / 48)}年 ${Math.floor((_sw % 48) / 4) + 1}月 ${(_sw % 4) + 1}週`;
                         setTimeout(() => { if (typeof showWeeklyNewsScreen === 'function') showWeeklyNewsScreen(thisWeekStr); }, 100);
                     }
                 });
@@ -5015,8 +5054,8 @@
             else if (window.currentStoreSort === 'sales_asc') storesToRender.sort((a, b) => (a.sales || 0) - (b.sales || 0));
             else if (window.currentStoreSort === 'profit_desc') storesToRender.sort((a, b) => b._profit - a._profit);
             else if (window.currentStoreSort === 'profit_asc') storesToRender.sort((a, b) => a._profit - b._profit);
-            else if (window.currentStoreSort === 'oldest') storesToRender.sort((a, b) => a.id - b.id);
-            else storesToRender.sort((a, b) => b.id - a.id); // newest
+            else if (window.currentStoreSort === 'oldest') storesToRender.sort((a, b) => (a._openWeek || 0) - (b._openWeek || 0));
+            else storesToRender.sort((a, b) => (b._openWeek || 0) - (a._openWeek || 0)); // newest
 
             if (storesToRender.length === 0) { listArea.innerHTML = `<div class="card" style="text-align:center; padding:40px 20px; color:var(--text-mut); background:transparent;">指定した条件の店舗は見つかりませんでした。</div>`; return; }
 
@@ -5096,8 +5135,12 @@
                 // 店長モード判定
                 let mgrAutoMode = st.hasManager && st.managerData && (st.managerAutoMode !== false);
                 // 店長推奨値（店長がいる場合）
+                // 店長推奨価格: 現在価格を基準に店長タイプ・Lvで微調整（急激な変化を防ぐ）
+                let _mgrBase = currentPrice > 0 ? currentPrice : 1200;
+                let _mgrMarginBonus = (st.managerData?.bonus?.margin || 1.0) - 1.0; // 0〜0.4
+                let _mgrLvBonus = ((st.managerLevel || 1) - 1) * 20; // Lv5で+80
                 let mgrRecommendedPrice = st.hasManager && st.managerData
-                    ? Math.min(2000, Math.max(300, 500 + (st.managerData.bonus?.margin || 1.0) * 100 + (st.managerLevel || 1) * 50))
+                    ? Math.min(2000, Math.max(600, _mgrBase + Math.floor(_mgrMarginBonus * 200) + _mgrLvBonus))
                     : currentPrice;
                 let mgrRecommendedStaff = st.hasManager && st.managerData
                     ? Math.max(1, Math.ceil((st.traffic || 3000) / 1200))
@@ -5158,7 +5201,7 @@
                     let _prop = _dist ? _dist.properties[st.propIndex] : null;
                     if (_prop && _prop.owner !== 'player') {
                         let _bval = Math.floor(_prop.currentValue || (_prop.rent * 500));
-                        return `<button class="btn-outline" style="width:100%;margin-top:6px;border-color:#f59e0b;color:#b45309;font-size:11px;padding:8px;" onclick="buyBuilding('${st.regionKey}','${st.location}',${st.propIndex},${_bval})">🏢 このビルを買収: ¥${Math.floor(_bval/10000).toLocaleString()}万</button>`;
+                        return `<button class="btn-outline" style="width:100%;margin-top:6px;border-color:#f59e0b;color:#b45309;font-size:11px;padding:8px;" onclick="buyBuilding('${st.regionKey}','${st.location}',${st.propIndex},${_bval})">🏢 このビルを買収: ¥${Math.floor(_bval / 10000).toLocaleString()}万</button>`;
                     }
                     return '';
                 })();
@@ -5516,7 +5559,11 @@
                 if (!c.menuRenewCount) c.menuRenewCount = {};
                 c.menuRenewCount[mId] = 0;
                 addLog(`【R&D】新メニュー「${mData.name}」を開発！ ★1スタート。リニューアルで星を上げよう！`, 'success', '自社');
+                // スクロール位置を維持
+                let _hqEl = document.getElementById('view-hq');
+                let _savedSc = _hqEl ? _hqEl.scrollTop : 0;
                 updateHQView(); updateDashboard();
+                requestAnimationFrame(() => { let el = document.getElementById('view-hq'); if (el) el.scrollTop = _savedSc; });
             }
         };
 
@@ -5541,7 +5588,10 @@
             c.menuStars[mId] = newStar;
             let msg = delta > 0 ? `★${cur} → ★${newStar} ⬆️ 品質向上！` : `★${cur} → ★${newStar} ⬇️ 惜しい結果...`;
             addLog(`【リニューアル】「${mData.name}」を刷新。${msg}`, delta > 0 ? 'success' : 'warning', '自社');
+            let _hqEl2 = document.getElementById('view-hq');
+            let _savedSc2 = _hqEl2 ? _hqEl2.scrollTop : 0;
             updateHQView(); updateDashboard();
+            requestAnimationFrame(() => { let el = document.getElementById('view-hq'); if (el) el.scrollTop = _savedSc2; });
         };
 
         window.equipRoaster = function (rid, isRental) {
@@ -5867,7 +5917,7 @@ ${ds.desc}`)) {
             if (window.saveMode === 'save') {
                 // セーブ容量チェック
                 let _usedKB = 0;
-                try { for(let k in localStorage) { if(localStorage.hasOwnProperty(k)) _usedKB += ((localStorage[k].length + k.length) * 2) / 1024; } } catch(e) {}
+                try { for (let k in localStorage) { if (localStorage.hasOwnProperty(k)) _usedKB += ((localStorage[k].length + k.length) * 2) / 1024; } } catch (e) { }
                 let _slotUsed = localStorage.getItem('coffeeSave_Slot' + slot) ? Math.round((localStorage.getItem('coffeeSave_Slot' + slot).length * 2) / 1024) : 0;
                 if (localStorage.getItem('coffeeSave_Slot' + slot) && !confirm(`スロット ${slot} を上書きしますか？
 (現在のスロット: ${_slotUsed}KB / localStorage使用: ${Math.round(_usedKB)}KB)`)) return;
@@ -5954,18 +6004,18 @@ ${ds.desc}`)) {
                             dotTitle = '👑 自社';
                         } else {
                             // 企業ごとに固定カラー（idのhashで決定）
-                            let h = 0; for (let ch of (occupant.id||'')) h = (h*31 + ch.charCodeAt(0)) & 0xFFFFFF;
+                            let h = 0; for (let ch of (occupant.id || '')) h = (h * 31 + ch.charCodeAt(0)) & 0xFFFFFF;
                             let hue = ((h % 360) + 360) % 360;
                             // 青系（自社色）と被らないように青帯を避ける
                             if (hue > 200 && hue < 240) hue = (hue + 60) % 360;
                             dotColor = `hsl(${hue}, 70%, 50%)`;
-                            dotTitle = occupant.name.replace(/\[.*?\]\s*/,'').substring(0,12);
+                            dotTitle = occupant.name.replace(/\[.*?\]\s*/, '').substring(0, 12);
                         }
                     }
                     if (prop.owner === 'player') dotBorder = 'outline: 2px solid #10b981; outline-offset:1px;';
                     else if (prop.owner && prop.owner !== 'player') {
                         let ownerCo = companies.find(co => co.id === prop.owner);
-                        let ownerName = ownerCo ? ownerCo.name.replace(/\[.*?\]\s*/,'').substring(0,8) : '';
+                        let ownerName = ownerCo ? ownerCo.name.replace(/\[.*?\]\s*/, '').substring(0, 8) : '';
                         dotBorder = 'outline: 2px solid #f59e0b; outline-offset:1px;';
                         if (!occupant) dotTitle = `🏢 ${ownerName}所有`;
                     }
@@ -6163,15 +6213,15 @@ ${ds.desc}`)) {
             _newStore._openWeek = week;
             p.stores.push(_newStore);
             // 初出店国チェック
-            const _newStoreCountry = ({'TOKYO':'JP','OSAKA':'JP','USA':'USA','CHINA':'CHINA','UK':'UK','KOREA':'KOREA','AUSTRALIA':'AUS','CANADA':'CAN','FRANCE':'FRA','GERMANY':'GER','INDIA':'IND'})[regionKey] || 'JP';
-            const _existingCountries = new Set(p.stores.slice(0,-1).map(s => ({'TOKYO':'JP','OSAKA':'JP','USA':'USA','CHINA':'CHINA','UK':'UK','KOREA':'KOREA','AUSTRALIA':'AUS','CANADA':'CAN','FRANCE':'FRA','GERMANY':'GER','INDIA':'IND'})[s.regionKey]||'JP'));
+            const _newStoreCountry = ({ 'TOKYO': 'JP', 'OSAKA': 'JP', 'USA': 'USA', 'CHINA': 'CHINA', 'UK': 'UK', 'KOREA': 'KOREA', 'AUSTRALIA': 'AUS', 'CANADA': 'CAN', 'FRANCE': 'FRA', 'GERMANY': 'GER', 'INDIA': 'IND' })[regionKey] || 'JP';
+            const _existingCountries = new Set(p.stores.slice(0, -1).map(s => ({ 'TOKYO': 'JP', 'OSAKA': 'JP', 'USA': 'USA', 'CHINA': 'CHINA', 'UK': 'UK', 'KOREA': 'KOREA', 'AUSTRALIA': 'AUS', 'CANADA': 'CAN', 'FRANCE': 'FRA', 'GERMANY': 'GER', 'INDIA': 'IND' })[s.regionKey] || 'JP'));
             if (!_existingCountries.has(_newStoreCountry) && _newStoreCountry !== 'JP') {
-                addLog(`【🌍 海外進出】${p.name} が${(countryEventNames||{})[_newStoreCountry]||_newStoreCountry}に初進出！`, 'success', 'ニュース');
+                addLog(`【🌍 海外進出】${p.name} が${(countryEventNames || {})[_newStoreCountry] || _newStoreCountry}に初進出！`, 'success', 'ニュース');
             }
             addLog(`【出店】${distName} にオープンしました！`, 'success', '店舗');
             updateDashboard(); renderPropertyScanner(regionKey, dist); displayDistricts(regionKey);
             // スキャナーのスクロール位置を維持
-            let _sc = document.getElementById('scanner-content'); if(_sc) { let _st = _sc.scrollTop; requestAnimationFrame(() => { if(_sc) _sc.scrollTop = _st; }); }
+            let _sc = document.getElementById('scanner-content'); if (_sc) { let _st = _sc.scrollTop; requestAnimationFrame(() => { if (_sc) _sc.scrollTop = _st; }); }
         };
 
         window.buyBuilding = function (regionKey, distName, propIndex, price) {
@@ -6356,10 +6406,10 @@ ${ds.desc}`)) {
                 <div class="grid-2" style="margin-bottom:30px;">
                     ${!p.isPublic ? `<div class="card" style="border: 2px solid var(--warning); background:#fffbeb;">
                         <div class="card-header" style="color:var(--gold);">📈 IPO（新規上場申請）</div>
-                        ${p._ipoApplied ? `<div style="text-align:center;padding:10px;color:var(--primary);font-weight:900;">⏳ 審査中... あと${Math.max(1,4-(week-p._ipoApplied))}週間</div>` : `
+                        ${p._ipoApplied ? `<div style="text-align:center;padding:10px;color:var(--primary);font-weight:900;">⏳ 審査中... あと${Math.max(1, 4 - (week - p._ipoApplied))}週間</div>` : `
                         <div style="font-size:12px;color:var(--text-mut);margin-bottom:10px;line-height:1.7;">
-                            <div>✅/❌ 時価総額10億以上: <b>${(p.stockPrice*p.shares)>=1000000000?'✅':'❌'} ¥${Math.floor((p.stockPrice*p.shares)/10000).toLocaleString()}万</b></div>
-                            <div>✅/❌ 黒字4期連続: <b>${(p._profitStreak||0)>=4?'✅':'❌'} ${p._profitStreak||0}期</b></div>
+                            <div>✅/❌ 時価総額10億以上: <b>${(p.stockPrice * p.shares) >= 1000000000 ? '✅' : '❌'} ¥${Math.floor((p.stockPrice * p.shares) / 10000).toLocaleString()}万</b></div>
+                            <div>✅/❌ 黒字4期連続: <b>${(p._profitStreak || 0) >= 4 ? '✅' : '❌'} ${p._profitStreak || 0}期</b></div>
                         </div>
                         <button class="btn-warning btn-large" style="font-weight:900;" onclick="goPublic()">🏦 上場申請する（審査費¥5,000万）</button>`}
                     </div>` : `<div class="card" style="border:2px solid var(--success);background:#f0fdf4;padding:14px;">
@@ -6431,8 +6481,8 @@ ${ds.desc}`)) {
                 filterBar.id = 'owned-props-filter';
                 filterBar.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;';
                 // 国フィルター
-                let countries = [...new Set(ownedProperties.filter(p=>p.owner==='player').map(p=>p.country))].filter(Boolean);
-                let countryOpts = `<option value="ALL">🌍 全地域</option>` + countries.map(c=>`<option value="${c}">${c}</option>`).join('');
+                let countries = [...new Set(ownedProperties.filter(p => p.owner === 'player').map(p => p.country))].filter(Boolean);
+                let countryOpts = `<option value="ALL">🌍 全地域</option>` + countries.map(c => `<option value="${c}">${c}</option>`).join('');
                 filterBar.innerHTML = `
                     <select id="opf-country" style="padding:6px 10px;border-radius:8px;border:1px solid var(--border);font-size:12px;background:var(--bg);cursor:pointer;" onchange="renderOwnedPropsGrid()">
                         ${countryOpts}
@@ -6459,7 +6509,7 @@ ${ds.desc}`)) {
             // 空き枠フィルター
             if (_opfVacant) {
                 myProps2 = myProps2.filter(p => {
-                    let d = globalNetworkData[p.rk]?.districts.find(d=>d.name===p.distName);
+                    let d = globalNetworkData[p.rk]?.districts.find(d => d.name === p.distName);
                     let mp = d?.properties[p.idx];
                     return mp && (mp.coffeeTenant === null || (mp.npcSlots > 0 && mp.occupiedNPCSlots < mp.npcSlots));
                 });
@@ -6472,7 +6522,7 @@ ${ds.desc}`)) {
 
             // 収益・時価を事前計算
             myProps2 = myProps2.map(pr => {
-                let distObj = globalNetworkData[pr.rk]?.districts.find(d=>d.name===pr.distName);
+                let distObj = globalNetworkData[pr.rk]?.districts.find(d => d.name === pr.distName);
                 let mp = distObj?.properties[pr.idx];
                 let inc = 0;
                 if (mp) {
@@ -6482,9 +6532,9 @@ ${ds.desc}`)) {
                 return { ...pr, _income: inc, _value: pr.currentValue || 0 };
             });
             // ソート
-            if (_opfSort === 'income_desc') myProps2.sort((a,b) => b._income - a._income);
-            else if (_opfSort === 'income_asc') myProps2.sort((a,b) => a._income - b._income);
-            else if (_opfSort === 'value_desc') myProps2.sort((a,b) => b._value - a._value);
+            if (_opfSort === 'income_desc') myProps2.sort((a, b) => b._income - a._income);
+            else if (_opfSort === 'income_asc') myProps2.sort((a, b) => a._income - b._income);
+            else if (_opfSort === 'value_desc') myProps2.sort((a, b) => b._value - a._value);
 
             let html = '';
             myProps2.forEach(function (pr) {
@@ -6713,7 +6763,7 @@ ${ds.desc}`)) {
             } else if (action === 'withdraw') {
                 if (currentDep < amount) { alert("預金残高が足りません。"); return; }
                 if (bankCo.cash < amount) {
-                    alert(`【銀行流動性不足】${bankCo.name.replace(/\[.*?\]\s*/,'')} の手元資金が不足しています。\n引き出し可能額: ¥${Math.floor(bankCo.cash/10000).toLocaleString()}万`);
+                    alert(`【銀行流動性不足】${bankCo.name.replace(/\[.*?\]\s*/, '')} の手元資金が不足しています。\n引き出し可能額: ¥${Math.floor(bankCo.cash / 10000).toLocaleString()}万`);
                     amount = Math.min(amount, Math.max(0, bankCo.cash));
                     if (amount <= 0) return;
                 }
@@ -6806,14 +6856,14 @@ ${ds.desc}`)) {
         window.goPublic = function () {
             let p = companies[0];
             if (p.isPublic) return alert('すでに上場しています。');
-            if (p._ipoApplied) return alert(`現在審査中です。あと${Math.max(1, 4-(week-p._ipoApplied))}週間で審査完了予定。`);
+            if (p._ipoApplied) return alert(`現在審査中です。あと${Math.max(1, 4 - (week - p._ipoApplied))}週間で審査完了予定。`);
 
             // ── 条件チェック ──
             let errors = [];
             // ① 時価総額10億以上
             let mktCap = p.stockPrice * p.shares;
-            if (mktCap < 1000000000) errors.push(`❌ 時価総額 ¥${Math.floor(mktCap/10000).toLocaleString()}万（必要: ¥10億以上）`);
-            else errors.push(`✅ 時価総額 ¥${Math.floor(mktCap/10000).toLocaleString()}万`);
+            if (mktCap < 1000000000) errors.push(`❌ 時価総額 ¥${Math.floor(mktCap / 10000).toLocaleString()}万（必要: ¥10億以上）`);
+            else errors.push(`✅ 時価総額 ¥${Math.floor(mktCap / 10000).toLocaleString()}万`);
 
             // ② 黒字4期連続
             let streak = p._profitStreak || 0;
@@ -6855,8 +6905,8 @@ ${ds.desc}`)) {
                 p.cash += proceeds;
                 // 株価履歴を初期化
                 stockHistory.datasets['player'] = Array(stockHistory.labels.length).fill(p.stockPrice);
-                addLog(`【🎉 上場完了！】${p.name} が正式上場しました！新規株式 ${newShares.toLocaleString()}株を ¥${issuePrice.toLocaleString()} で放出。調達額: ¥${Math.floor(proceeds/10000).toLocaleString()}万`, 'success', '自社');
-                if (typeof showMarketAlert === 'function') showMarketAlert('🎉 新規上場', p.name, `IPO完了！¥${Math.floor(proceeds/10000).toLocaleString()}万を調達しました。`, 'success');
+                addLog(`【🎉 上場完了！】${p.name} が正式上場しました！新規株式 ${newShares.toLocaleString()}株を ¥${issuePrice.toLocaleString()} で放出。調達額: ¥${Math.floor(proceeds / 10000).toLocaleString()}万`, 'success', '自社');
+                if (typeof showMarketAlert === 'function') showMarketAlert('🎉 新規上場', p.name, `IPO完了！¥${Math.floor(proceeds / 10000).toLocaleString()}万を調達しました。`, 'success');
                 updateDashboard(); renderPortfolio();
             }
         };
@@ -7799,27 +7849,27 @@ ${ds.desc}`)) {
             let buyCost = remainShares > 0 ? Math.floor(remainShares * sub.stockPrice * 1.1) : 0; // 10%プレミアム
 
             // 普通預金残高（他行に預けている分）
-            let subDeposits = Object.values(sub.deposits || {}).reduce((s,v) => s+v, 0);
+            let subDeposits = Object.values(sub.deposits || {}).reduce((s, v) => s + v, 0);
             // 定期預金残高
-            let subTermDeps = (sub.termDeposits || []).reduce((s,td) => s+td.amount, 0);
+            let subTermDeps = (sub.termDeposits || []).reduce((s, td) => s + td.amount, 0);
             let totalSubAssets = sub.cash + subDeposits + subTermDeps;
 
-            let msg = `【吸収合併】${sub.name.replace(/\[.*?\]\s*/,'')} を完全解散し、全資産を自社に統合します。
+            let msg = `【吸収合併】${sub.name.replace(/\[.*?\]\s*/, '')} を完全解散し、全資産を自社に統合します。
 
 `;
-            msg += `引継ぎ現金: ¥${Math.floor(sub.cash/10000).toLocaleString()}万
+            msg += `引継ぎ現金: ¥${Math.floor(sub.cash / 10000).toLocaleString()}万
 `;
-            msg += `普通預金: ¥${Math.floor(subDeposits/10000).toLocaleString()}万
+            msg += `普通預金: ¥${Math.floor(subDeposits / 10000).toLocaleString()}万
 `;
-            msg += `定期預金: ¥${Math.floor(subTermDeps/10000).toLocaleString()}万
+            msg += `定期預金: ¥${Math.floor(subTermDeps / 10000).toLocaleString()}万
 `;
-            if (buyCost > 0) msg += `残株買取費用: -¥${Math.floor(buyCost/10000).toLocaleString()}万 (${remainShares.toLocaleString()}株)
+            if (buyCost > 0) msg += `残株買取費用: -¥${Math.floor(buyCost / 10000).toLocaleString()}万 (${remainShares.toLocaleString()}株)
 `;
             msg += `
-純取得資産: ¥${Math.floor((totalSubAssets - buyCost)/10000).toLocaleString()}万`;
+純取得資産: ¥${Math.floor((totalSubAssets - buyCost) / 10000).toLocaleString()}万`;
 
             if (!confirm(msg)) return;
-            if (buyCost > 0 && p.cash < buyCost) return alert(`残株買取費用が不足しています。必要: ¥${Math.floor(buyCost/10000).toLocaleString()}万`);
+            if (buyCost > 0 && p.cash < buyCost) return alert(`残株買取費用が不足しています。必要: ¥${Math.floor(buyCost / 10000).toLocaleString()}万`);
 
             // 残株買取
             if (buyCost > 0) {
@@ -7867,7 +7917,7 @@ ${ds.desc}`)) {
                     if (debt > 0) {
                         if (!p.bankDebts) p.bankDebts = {};
                         p.bankDebts[bankId] = (p.bankDebts[bankId] || 0) + debt;
-                        addLog(`【合併債務】${sub.name.replace(/\[.*?\]\s*/,'')} の借入 ¥${Math.floor(debt/10000).toLocaleString()}万 を引継ぎました。`, 'warning', 'M&A');
+                        addLog(`【合併債務】${sub.name.replace(/\[.*?\]\s*/, '')} の借入 ¥${Math.floor(debt / 10000).toLocaleString()}万 を引継ぎました。`, 'warning', 'M&A');
                     }
                 }
             }
@@ -7889,7 +7939,7 @@ ${ds.desc}`)) {
                     p.shareholders[c.id] = (p.shareholders[c.id] || 0) + sub.shareholders[c.id];
                 }
             });
-            addLog(`【M&A】${sub.name.replace(/\[.*?\]\s*/,'')} を完全吸収合併。現金¥${Math.floor(sub.cash/10000).toLocaleString()}万・預金¥${Math.floor((subDeposits+subTermDeps)/10000).toLocaleString()}万を引継ぎました。`, 'success', '特報');
+            addLog(`【M&A】${sub.name.replace(/\[.*?\]\s*/, '')} を完全吸収合併。現金¥${Math.floor(sub.cash / 10000).toLocaleString()}万・預金¥${Math.floor((subDeposits + subTermDeps) / 10000).toLocaleString()}万を引継ぎました。`, 'success', '特報');
             companies.splice(subIdx, 1); renderSubsidiaryList(); updateDashboard();
         };
 
@@ -8104,8 +8154,24 @@ ${ds.desc}`)) {
             // ── タブ別コンテンツ ──
             if (tab === 'profile') {
                 // 既存レイアウト（円グラフ ＋ 右カラム）をそのまま維持
+                // ownedPropertiesとglobalNetworkData両方から所有物件を収集
                 let props = ownedProperties.filter(p => p.owner === cid);
-                let propHtml = props.length > 0 ? props.map(p => `<div class="flex-between" style="border-bottom:1px dashed var(--border); padding:10px 0; font-size:13px;"><span>🏢 ${p.name.substring(0, 18)}</span><span style="font-weight:bold; color:var(--success);">¥${(p.currentValue / 10000).toLocaleString()}万</span></div>`).join('') : '<div style="color:var(--text-mut); text-align:center; padding:15px;">所有物件なし</div>';
+                // globalNetworkDataからも補完（ownedPropertiesに登録されていない場合）
+                let _extraProps = [];
+                Object.keys(globalNetworkData).forEach(rk => {
+                    globalNetworkData[rk].districts.forEach(d => {
+                        d.properties.forEach((prop, idx) => {
+                            if (prop.owner === cid) {
+                                let alreadyIn = props.some(p => p.rk === rk && p.distName === d.name && p.idx === idx);
+                                if (!alreadyIn) {
+                                    _extraProps.push({ name: `[${d.name}] ${prop.type}`, currentValue: prop.currentValue || (prop.rent * 500), rk, distName: d.name, idx });
+                                }
+                            }
+                        });
+                    });
+                });
+                let allProps = [...props, ..._extraProps];
+                let propHtml = allProps.length > 0 ? allProps.map(p => `<div class="flex-between" style="border-bottom:1px dashed var(--border); padding:10px 0; font-size:13px;"><span>🏢 ${(p.name || '').substring(0, 18)}</span><span style="font-weight:bold; color:var(--success);">¥${Math.floor((p.currentValue || 0) / 10000).toLocaleString()}万</span></div>`).join('') : '<div style="color:var(--text-mut); text-align:center; padding:15px;">所有物件なし</div>';
                 let subs = companies.filter(c => c.id !== cid && (c.parent === cid || (c.shareholders[cid] / c.shares) > 0.5));
                 let subHtml = subs.length > 0 ? subs.map(c => {
                     let domRate = (c.shares > 0 && c.shareholders && c.shareholders[cid]) ? ((c.shareholders[cid] / c.shares) * 100).toFixed(1) : '--';
@@ -8120,13 +8186,13 @@ ${ds.desc}`)) {
                     <div class="card" style="flex:1 1 320px;margin:0;padding:20px;border-top:5px solid var(--primary);box-shadow:var(--shadow-md);">
                         <h4 style="margin:0 0 15px 0;color:var(--text-main);">📊 株主構成比率</h4>
                         ${(() => {
-                            let _tp = companyTypeProfiles[target.personality];
-                            if (!_tp) return '';
-                            return `<div style="margin-bottom:12px;padding:8px 12px;border-radius:8px;background:${_tp.color}11;border:1px solid ${_tp.color}33;display:flex;align-items:center;gap:8px;">
+                        let _tp = companyTypeProfiles[target.personality];
+                        if (!_tp) return '';
+                        return `<div style="margin-bottom:12px;padding:8px 12px;border-radius:8px;background:${_tp.color}11;border:1px solid ${_tp.color}33;display:flex;align-items:center;gap:8px;">
                                 <span style="font-size:16px;">${_tp.label.split(' ')[0]}</span>
                                 <div><div style="font-size:12px;font-weight:900;color:${_tp.color};">${_tp.label}</div><div style="font-size:10px;color:var(--text-mut);">${_tp.desc}</div></div>
                             </div>`;
-                        })()}
+                    })()}
                         <div style="width:100%;height:220px;position:relative;margin-bottom:20px;"><canvas id="shareholder-chart"></canvas></div>
                         <div style="background:#f9fafb;padding:15px;border-radius:12px;display:grid;grid-template-columns:1fr 1fr;gap:15px;border:1px solid var(--border);">
                             <div><div style="font-size:11px;color:var(--text-mut);font-weight:bold;">手元資金</div><b style="font-size:15px;">¥${Math.floor(target.cash / 10000).toLocaleString()}万</b></div>
@@ -8136,7 +8202,7 @@ ${ds.desc}`)) {
                         </div>
                     </div>
                     <div style="flex:1 1 240px;display:flex;flex-direction:column;gap:12px;">
-                        <div class="card" style="margin:0;padding:15px;border-left:4px solid #8b5cf6;"><h5 style="margin:0 0 10px 0;font-size:14px;">🏢 所有不動産 (${props.length})</h5><div style="max-height:150px;overflow-y:auto;padding-right:5px;">${propHtml}</div></div>
+                        <div class="card" style="margin:0;padding:15px;border-left:4px solid #8b5cf6;"><h5 style="margin:0 0 10px 0;font-size:14px;">🏢 所有不動産 (${allProps.length})</h5><div style="max-height:150px;overflow-y:auto;padding-right:5px;">${propHtml}</div></div>
                         <div class="card" style="margin:0;padding:15px;border-left:4px solid var(--warning);"><h5 style="margin:0 0 10px 0;font-size:14px;">🤝 傘下企業 (${subs.length})</h5><div style="max-height:150px;overflow-y:auto;padding-right:5px;">${subHtml}</div></div>
                         <div class="card" style="margin:0;padding:15px;border-left:4px solid var(--success);"><h5 style="margin:0 0 10px 0;font-size:14px;">💼 保有株 (${portCount})</h5><div style="padding-right:5px;">${portfolioHtml}</div></div>
                     </div>
@@ -8248,7 +8314,7 @@ ${ds.desc}`)) {
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;font-size:12px;">
                             <div style="background:#fff;border-radius:6px;padding:8px;border:1px solid #e2e8f0;">
                                 <div style="color:#64748b;font-size:10px;margin-bottom:2px;">預かり総額（受託残高）</div>
-                                <div style="font-weight:900;">¥${Math.floor(_custody/10000).toLocaleString()}万</div>
+                                <div style="font-weight:900;">¥${Math.floor(_custody / 10000).toLocaleString()}万</div>
                             </div>
                             <div style="background:#fff;border-radius:6px;padding:8px;border:1px solid #e2e8f0;">
                                 <div style="color:#64748b;font-size:10px;margin-bottom:2px;">流動性比率</div>
@@ -8329,7 +8395,10 @@ ${ds.desc}`)) {
                 }
 
                 // ツリーノードHTMLを再帰生成
-                function _buildTreeNode(co, currentId, depth) {
+                function _buildTreeNode(co, currentId, depth, _visited) {
+                    if (!_visited) _visited = new Set();
+                    if (_visited.has(co.id)) return '';
+                    _visited.add(co.id);
                     let isCurrent = co.id === currentId;
                     let cleanName = co.name.replace(/\[.*?\]\s*/g, '');
                     let badge = window.getCountryBadge ? window.getCountryBadge(co.country) : '';
@@ -8339,8 +8408,8 @@ ${ds.desc}`)) {
 
                     // 子会社を取得（直接子のみ）
                     let children = companies.filter(cx =>
-                        cx.parent === co.id ||
-                        (cx.shareholders && cx.shareholders[co.id] && co.shares > 0 && (cx.shareholders[co.id] / cx.shares) > 0.5 && cx.parent !== 'player')
+                        (cx.parent === co.id) ||
+                        (!cx.parent && cx.shareholders && cx.shareholders[co.id] && (cx.shareholders[co.id] / Math.max(1, cx.shares)) > 0.5)
                     );
 
                     // 現在の企業ハイライト色
@@ -8379,7 +8448,7 @@ ${ds.desc}`)) {
 
                     // 再帰で子を描画
                     children.forEach(child => {
-                        nodeHtml += _buildTreeNode(child, currentId, depth + 1);
+                        nodeHtml += _buildTreeNode(child, currentId, depth + 1, _visited);
                     });
 
                     return nodeHtml;
@@ -9228,10 +9297,10 @@ ${ds.desc}`)) {
             if (!p.contracts.logByCountry) p.contracts.logByCountry = {};
             if (!p.contracts.itByCountry) p.contracts.itByCountry = {};
             // グローバル契約がある場合は国別のデフォルト値として引き継ぐ
-            const _cMapC = { 'TOKYO':'JP','OSAKA':'JP','USA':'USA','CHINA':'CHINA','UK':'UK','KOREA':'KOREA','AUSTRALIA':'AUS','CANADA':'CAN','FRANCE':'FRA','GERMANY':'GER','INDIA':'IND' };
+            const _cMapC = { 'TOKYO': 'JP', 'OSAKA': 'JP', 'USA': 'USA', 'CHINA': 'CHINA', 'UK': 'UK', 'KOREA': 'KOREA', 'AUSTRALIA': 'AUS', 'CANADA': 'CAN', 'FRANCE': 'FRA', 'GERMANY': 'GER', 'INDIA': 'IND' };
             let activeCountries = [...new Set(p.stores.map(s => _cMapC[s.regionKey]).filter(Boolean))];
             activeCountries.forEach(country => {
-                ['logByCountry','itByCountry'].forEach(key => {
+                ['logByCountry', 'itByCountry'].forEach(key => {
                     if (!p.contracts[key][country]) {
                         let secKey = key === 'logByCountry' ? 'log' : 'it';
                         // 同国優先、なければグローバル契約を継承
@@ -9377,18 +9446,18 @@ ${ds.desc}`)) {
                     let currentId = (contractByCountry || {})[country];
                     let currentCo = companies.find(c => c.id === currentId);
                     let traits = window.getContractTraits(currentCo);
-                    let countInCountry = p.stores.filter(s => {const _cm={'TOKYO':'JP','OSAKA':'JP','USA':'USA','CHINA':'CHINA','UK':'UK','KOREA':'KOREA','AUSTRALIA':'AUS','CANADA':'CAN','FRANCE':'FRA','GERMANY':'GER','INDIA':'IND'};return _cm[s.regionKey]===country;}).length;
+                    let countInCountry = p.stores.filter(s => { const _cm = { 'TOKYO': 'JP', 'OSAKA': 'JP', 'USA': 'USA', 'CHINA': 'CHINA', 'UK': 'UK', 'KOREA': 'KOREA', 'AUSTRALIA': 'AUS', 'CANADA': 'CAN', 'FRANCE': 'FRA', 'GERMANY': 'GER', 'INDIA': 'IND' }; return _cm[s.regionKey] === country; }).length;
                     let cost = traits.cost * countInCountry;
                     let isOwned = currentCo && currentCo.parent === 'player';
-                    let countryFlags = {JP:'🇯🇵',USA:'🇺🇸',CHINA:'🇨🇳',UK:'🇬🇧',KOREA:'🇰🇷',AUS:'🇦🇺',CAN:'🇨🇦',FRA:'🇫🇷',GER:'🇩🇪',IND:'🇮🇳'};
+                    let countryFlags = { JP: '🇯🇵', USA: '🇺🇸', CHINA: '🇨🇳', UK: '🇬🇧', KOREA: '🇰🇷', AUS: '🇦🇺', CAN: '🇨🇦', FRA: '🇫🇷', GER: '🇩🇪', IND: '🇮🇳' };
                     let opts = `<option value="">未契約</option>` + candidates.map(c => {
-                        let t = window.getContractTraits(c); let isSub = c.parent==='player';
-                        return `<option value="${c.id}" ${currentId===c.id?'selected':''}>${isSub?'👑 ':''}${c.name.replace(/\[.*?\]\s*/,'')} [${t.desc}]</option>`;
+                        let t = window.getContractTraits(c); let isSub = c.parent === 'player';
+                        return `<option value="${c.id}" ${currentId === c.id ? 'selected' : ''}>${isSub ? '👑 ' : ''}${c.name.replace(/\[.*?\]\s*/, '')} [${t.desc}]</option>`;
                     }).join('');
                     return `<div style="margin-bottom:8px;border-bottom:1px dashed var(--border);padding-bottom:6px;">
                         <div class="flex-between" style="margin-bottom:4px;">
-                            <span style="font-size:12px;font-weight:bold;">${countryFlags[country]||''} ${country} (${countInCountry}店)</span>
-                            <b style="font-size:11px;color:${isOwned?'var(--success)':'var(--danger)'};">${isOwned?'還流中':'-¥'+(cost/10000).toLocaleString()+'万'}</b>
+                            <span style="font-size:12px;font-weight:bold;">${countryFlags[country] || ''} ${country} (${countInCountry}店)</span>
+                            <b style="font-size:11px;color:${isOwned ? 'var(--success)' : 'var(--danger)'};">${isOwned ? '還流中' : '-¥' + (cost / 10000).toLocaleString() + '万'}</b>
                         </div>
                         <select onchange="${changeFn}('${country}',this.value)" style="width:100%;padding:5px;font-size:11px;border-radius:4px;border:1px solid var(--border);">${opts}</select>
                     </div>`;
@@ -9603,12 +9672,12 @@ ${ds.desc}`)) {
         };
 
         // 国別IT・物流契約変更
-        window.changeContractByCountry_log = function(country, coId) {
+        window.changeContractByCountry_log = function (country, coId) {
             let p = companies[0];
             if (!p.contracts.logByCountry) p.contracts.logByCountry = {};
             p.contracts.logByCountry[country] = coId || null;
         };
-        window.changeContractByCountry_it = function(country, coId) {
+        window.changeContractByCountry_it = function (country, coId) {
             let p = companies[0];
             if (!p.contracts.itByCountry) p.contracts.itByCountry = {};
             p.contracts.itByCountry[country] = coId || null;
@@ -9996,7 +10065,7 @@ ${ds.desc}`)) {
                             let isFor = Math.random() < Math.max(0.10, Math.min(0.90, baseSupport));
                             if (isFor) aiYes += s; else aiNo += s;
                             let aiName = aiCo ? aiCo.name.replace(/\[.*?\]\s*/, '') : id;
-                            let aiFlag = aiCo && aiCo.country ? ({JP:'🇯🇵',USA:'🇺🇸',CHINA:'🇨🇳',UK:'🇬🇧',KOREA:'🇰🇷',AUS:'🇦🇺',CAN:'🇨🇦',FRA:'🇫🇷',GER:'🇩🇪',IND:'🇮🇳'}[aiCo.country]||'') : '';
+                            let aiFlag = aiCo && aiCo.country ? ({ JP: '🇯🇵', USA: '🇺🇸', CHINA: '🇨🇳', UK: '🇬🇧', KOREA: '🇰🇷', AUS: '🇦🇺', CAN: '🇨🇦', FRA: '🇫🇷', GER: '🇩🇪', IND: '🇮🇳' }[aiCo.country] || '') : '';
                             aiVoteHtml += `<div class="flex-between" style="padding:8px 0; border-bottom:1px solid #e2e8f0; font-size:13px;">
                                 <span style="font-weight:bold;">${aiFlag} ${aiName} <span style="color:var(--text-mut); font-size:11px;">(${((s / totalShares) * 100).toFixed(1)}%)</span></span>
                                 <span style="font-weight:900; color:${isFor ? 'var(--success)' : 'var(--danger)'};">${isFor ? '⭕ 賛成' : '❌ 反対'}</span>
