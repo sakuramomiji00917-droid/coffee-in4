@@ -4099,7 +4099,7 @@
                                     let _playerRank = _allSH.findIndex(([id]) => id === 'player');
                                     let _isTop5 = _playerRank >= 0 && _playerRank < 5;
 
-                                    // 🚨 【新規】プレイヤーが対象企業の株主であれば、TOB応募の選択肢を出す
+                                    // プレイヤーが株主の場合の対応
                                     if (playerStake > 0 && playerStake < 0.05 && _isTop5) {
                                         // 5%未満の場合は純粋な応募判断のみ
                                         let playerShares = target.shareholders['player'];
@@ -4107,10 +4107,10 @@
                                         window.activeVotingQueue.push({
                                             type: 'tob_offer', target: target, proposerName: c.name.replace(/\[.*?\]\s*/, ''),
                                             title: `公開買付 (TOB) への応募要請`,
-                                            desc: `巨大資本 ${c.name.replace(/\[.*?\]\s*/, '')} が当社への敵対的TOBを宣言しました。<br>
-                                            提示価格は <b>¥${premiumPrice.toLocaleString()}</b> (現在値 ¥${target.stockPrice.toLocaleString()}) です。<br>
-                                            あなたの保有株 ${playerShares.toLocaleString()} 株を売却（応募）しますか？<br>
-                                            売却益概算: <span style="color:var(--success); font-weight:bold;">¥${Math.floor(offerTotal / 10000).toLocaleString()}万</span>`,
+                                            desc: `${c.name.replace(/\[.*?\]\s*/, '')} が ${target.name.replace(/\[.*?\]\s*/, '')} へのTOBを宣言しました。<br>
+                                            提示価格: <b>¥${premiumPrice.toLocaleString()}</b> (現在値 ¥${target.stockPrice.toLocaleString()})<br>
+                                            保有株 ${playerShares.toLocaleString()} 株を売却しますか？<br>
+                                            売却益: <span style="color:var(--success);font-weight:bold;">¥${Math.floor(offerTotal / 10000).toLocaleString()}万</span>`,
                                             onVoted: (isPassed) => {
                                                 if (isPassed) {
                                                     companies[0].cash += offerTotal;
@@ -4124,11 +4124,45 @@
                                                 if (!target.activeTOB_v2) {
                                                     target.activeTOB_v2 = { bidder: c.id, price: premiumPrice, targetShares: sharesToBuy, startWeek: week, deadline: week + 4 };
                                                     let pPct = Math.round((premiumPrice / target.stockPrice - 1) * 100);
-                                                    addLog(`【TOB宣言】巨額資金で ${c.name.replace(/\[.*?\]\s*/, '')} が ${target.name.replace(/\[.*?\]\s*/, '')} へTOBを開始！（プレミアム +${pPct}%）`, 'alert', 'M&A');
+                                                    addLog(`【TOB宣言】${c.name.replace(/\[.*?\]\s*/, '')} が ${target.name.replace(/\[.*?\]\s*/, '')} へTOBを開始！（プレミアム +${pPct}%）`, 'alert', 'M&A');
                                                 }
                                             }
                                         });
-                                    } else if (playerStake >= 0.05 || _isTop5) {
+                                    } else if (playerStake >= 0.05 && playerStake < 0.50) {
+                                        // 5%〜49%の大株主：売却か防衛かを選択
+                                        let playerShares = target.shareholders['player'];
+                                        let offerTotal = playerShares * premiumPrice;
+                                        let pPct = Math.round((premiumPrice / target.stockPrice - 1) * 100);
+                                        window.activeVotingQueue.push({
+                                            type: 'tob_major_holder', target: target, proposerName: c.name.replace(/\[.*?\]\s*/, ''),
+                                            title: `大株主としての判断 (${Math.round(playerStake * 100)}%保有)`,
+                                            desc: `<b>${c.name.replace(/\[.*?\]\s*/, '')}</b> が <b>${target.name.replace(/\[.*?\]\s*/, '')}</b> へTOBを宣言しました。<br><br>
+                                            提示価格: <b style="color:var(--gold);">¥${premiumPrice.toLocaleString()}</b>（現在値 +${pPct}%プレミアム）<br>
+                                            あなたは <b style="color:var(--primary);">${Math.round(playerStake*100)}%（${playerShares.toLocaleString()}株）</b> を保有しています。<br><br>
+                                            <div style="background:#f0fdf4;border-radius:8px;padding:8px;margin:8px 0;font-size:12px;">
+                                            💰 <b>売却した場合の収益: ¥${Math.floor(offerTotal/10000).toLocaleString()}万</b><br>
+                                            🛡 売却を拒否すると買収側は過半数取得が困難になります
+                                            </div>
+                                            保有株を売却して応募しますか？`,
+                                            yesLabel: `💰 売却する（+¥${Math.floor(offerTotal/10000).toLocaleString()}万）`,
+                                            noLabel: `🛡 売却拒否（買収を困難にする）`,
+                                            onVoted: (isPassed) => {
+                                                if (isPassed) {
+                                                    companies[0].cash += offerTotal;
+                                                    c.cash -= offerTotal;
+                                                    c.shareholders[target.id] = (c.shareholders[target.id] || 0) + playerShares;
+                                                    target.shareholders['player'] = 0;
+                                                    addLog(`【TOB応募】¥${Math.floor(offerTotal/10000).toLocaleString()}万で ${target.name.replace(/\[.*?\]\s*/, '')} の保有株(${Math.round(playerStake*100)}%)を全売却しました。`, 'success', '自社');
+                                                } else {
+                                                    addLog(`【TOB防衛】${target.name.replace(/\[.*?\]\s*/, '')} の大株主として売却を拒否。買収側は過半数取得が困難になりました。`, 'alert', 'M&A');
+                                                }
+                                                if (!target.activeTOB_v2) {
+                                                    target.activeTOB_v2 = { bidder: c.id, price: premiumPrice, targetShares: sharesToBuy, startWeek: week, deadline: week + 4 };
+                                                    addLog(`【TOB宣言】${c.name.replace(/\[.*?\]\s*/, '')} が ${target.name.replace(/\[.*?\]\s*/, '')} へTOBを開始！（プレミアム +${pPct}%）`, 'alert', 'M&A');
+                                                }
+                                            }
+                                        });
+                                    } else if (playerStake >= 0.50 || _isTop5) {
                                         window.activeVotingQueue.push({
                                             type: 'tob_defense', target: target, proposerName: c.name.replace(/\[.*?\]\s*/, ''),
                                             title: `買収防衛策（ポイズンピル等）の発動`,
@@ -5055,7 +5089,7 @@
                                                             <button class="btn-danger" style="flex:1;padding:14px;font-size:15px;font-weight:900;border-radius:10px;" onclick="
                                                                 let _pp=companies[0];
                                                                 let tc=companies.find(x=>x.id==='${targetId}');
-                                                                if(tc){_pp.cash-=${fc};tc.shareholders['player']=(tc.shareholders['player']||0)+${tob.targetShares};tc.playerTotalCost+=${fc};tc.parent='player';tc.name='[自社傘下] '+tc.name.replace(/\\[.*?\\]\\s*/g,'');addLog('【TOB成功】4週間の公開買付が完了。'+tc.name.replace(/\\[.*?\\]\\s*/g,'')+'を子会社化しました！','success','M&A');
+                                                                if(tc){let _mktF=tc.shareholders['market']||0;let _acqShares=Math.min(${tob.targetShares},_mktF);let _acqCost=tc.stockPrice*_acqShares;let _refund=${fc}-_acqCost;if(_refund>0)_pp.cash+=_refund;_pp.cash-=Math.min(${fc},_acqCost);tc.shareholders['player']=(tc.shareholders['player']||0)+_acqShares;tc.shareholders['market']=Math.max(0,_mktF-_acqShares);tc.playerTotalCost+=_acqCost;let _pHeld=tc.shareholders['player']||0;let _pPct=_pHeld/tc.shares;if(_pPct>0.50){tc.parent='player';tc.name='[自社傘下] '+tc.name.replace(/\\[.*?\\]\\s*/g,'');addLog('【TOB成功】'+tc.name.replace(/\\[.*?\\]\\s*/g,'')+'を子会社化しました！('+Math.floor(_pPct*100)+'%取得)','success','M&A');}else{addLog('【TOB部分成立】市場流通株不足で過半数未達('+Math.floor(_pPct*100)+'%取得)','alert','M&A');}
                                                                 (function payAdFeeOnMA(){
     // M&A新聞手数料: 買収費用の5%を契約している広告代理店に支払い
     let _nwsFee=Math.floor(${fc}*0.05);
@@ -5088,20 +5122,31 @@
                             }
                         } else {
                             if (bidderCo && bidderCo.cash >= finalCost) {
-                                bidderCo.cash -= finalCost;
-                                c.shareholders[tob.bidder] = (c.shareholders[tob.bidder] || 0) + tob.targetShares;
-                                // 50%超保有の場合のみ傘下化
+                                // TOBは市場流通株（market）からのみ取得
+                                let _marketFloat = c.shareholders['market'] || 0;
+                                let _actualBuy = Math.min(tob.targetShares, _marketFloat);
+                                let _actualCost = tob.price * _actualBuy;
+
+                                if (_actualBuy > 0) {
+                                    bidderCo.cash -= _actualCost;
+                                    c.shareholders[tob.bidder] = (c.shareholders[tob.bidder] || 0) + _actualBuy;
+                                    c.shareholders['market'] = Math.max(0, _marketFloat - _actualBuy);
+                                    // 余剰資金を返却
+                                    if (_actualCost < finalCost) bidderCo.cash += (finalCost - _actualCost);
+                                }
+
                                 let _totalHeld = c.shareholders[tob.bidder] || 0;
-                                let _floatShares = window.getFloatShares ? window.getFloatShares(c) : c.shares;
-                                let _holdPct = _floatShares > 0 ? _totalHeld / c.shares : 0;
+                                let _holdPct = c.shares > 0 ? _totalHeld / c.shares : 0;
                                 let tgtName = c.name.replace(/\[.*?\]\s*/g, '');
                                 let bdrName = bidderCo.name.replace(/\[.*?\]\s*/g, '');
                                 if (_holdPct > 0.50) {
                                     c.parent = bidderCo.id;
                                     c.name = `[${bdrName}傘下] ${tgtName}`;
                                     addLog(`【買収完了】${bdrName} が ${tgtName} を子会社化しました。（${Math.floor(_holdPct*100)}%取得）`, 'alert', 'M&A');
+                                } else if (_actualBuy > 0) {
+                                    addLog(`【TOB部分成立】${bdrName} が ${tgtName} の株式 ${Math.floor(_holdPct*100)}% を取得。市場流通株が少なく過半数未達。`, 'normal', 'M&A');
                                 } else {
-                                    addLog(`【大株主】${bdrName} が ${tgtName} の株式 ${Math.floor(_holdPct*100)}% を取得。過半数未達のため傘下化なし。`, 'normal', 'M&A');
+                                    addLog(`【TOB不成立】${bdrName} の ${tgtName} へのTOBは市場流通株不足で不成立。`, 'alert', 'M&A');
                                 }
                             } else if (bidderCo) {
                                 // AI資金不足 → 撤退ニュース
@@ -8295,14 +8340,24 @@ ${ds.desc}`)) {
                 // 市場直接買付は40%未満に制限
                 if (newRatio >= 0.40 && c.id !== 'player') return alert("【法規制】市場での直接買付は発行済株式の40%未満に制限されています。\n過半数を取得して買収するには「TOB (公開買付)」を宣言してください。");
 
-                p.cash -= cost; c.shareholders['player'] = currentOwned + a; c.playerTotalCost += cost;
+                p.cash -= cost;
+                c.shareholders['player'] = currentOwned + a;
+                // 市場流通株から減算
+                if (c.shareholders['market'] !== undefined) {
+                    c.shareholders['market'] = Math.max(0, (c.shareholders['market'] || 0) - a);
+                }
+                c.playerTotalCost += cost;
                 addLog(`市場で ${c.name.replace(/\[.*?\]\s*/, '')} を ${a.toLocaleString()}株 購入しました。`, 'normal', 'M&A');
             } else {
                 let o = c.shareholders['player'] || 0; if (o < a) return alert("保有株数が不足しています。");
                 let profitPerShare = c.stockPrice - (c.playerTotalCost / o);
                 window.weeklyStockSaleProfit = (window.weeklyStockSaleProfit || 0) + (profitPerShare * a);
 
-                p.cash += cost; c.playerTotalCost -= (c.playerTotalCost / o) * a; c.shareholders['player'] -= a;
+                p.cash += cost;
+                c.playerTotalCost -= (c.playerTotalCost / o) * a;
+                c.shareholders['player'] -= a;
+                // 売却分を市場流通株に戻す
+                if (c.isPublic) c.shareholders['market'] = (c.shareholders['market'] || 0) + a;
                 if (c.shareholders['player'] === 0) c.playerTotalCost = 0;
                 addLog(`保有する ${c.name.replace(/\[.*?\]\s*/, '')} を ${a.toLocaleString()}株 売却しました。`, 'normal', 'M&A');
             }
@@ -11270,8 +11325,8 @@ ${ds.desc}`)) {
                                 <div style="font-size:24px; font-weight:900; color:var(--primary);">${playerVotes.toLocaleString()} 票 <span style="font-size:14px; color:var(--text-mut);">(${(playerStake * 100).toFixed(1)}%)</span></div>
                             </div>
                             <div style="display:flex; gap:15px; margin-bottom:10px;">
-                                <button id="btn-vote-yes" class="btn-primary btn-large" style="flex:1; background:var(--success); font-size:18px; padding:20px;">⭕ 賛成に投票</button>
-                                <button id="btn-vote-no" class="btn-primary btn-large" style="flex:1; background:var(--danger); font-size:18px; padding:20px;">❌ 反対に投票</button>
+                                <button id="btn-vote-yes" class="btn-primary btn-large" style="flex:1; background:var(--success); font-size:16px; padding:18px;">${eventData.yesLabel || '⭕ 賛成に投票'}</button>
+                                <button id="btn-vote-no" class="btn-primary btn-large" style="flex:1; background:var(--danger); font-size:16px; padding:18px;">${eventData.noLabel || '❌ 反対に投票'}</button>
                             </div>
                             <div id="voting-result-area" style="display:none; text-align:center; padding:20px; border-top:1px dashed var(--border); margin-top:20px;">
                                 <h3 id="voting-final-text" style="font-size:22px; font-weight:900; margin-bottom:15px;"></h3>
