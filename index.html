@@ -912,17 +912,25 @@
             else if (c.sector === 'sogo') weights = [0.25, 0.10, 0.30, 0.25, 0.10];
             else if (c.sector === 're')   weights = [0.15, 0.30, 0.25, 0.15, 0.15];
             else if (c.sector === 'ins')  weights = [0.05, 0.50, 0.25, 0.10, 0.10];
-            else weights = [0.20, 0.20, 0.20, 0.25, 0.15]; // coffee/it/log/etc
-            // 重み付きランダム選択
+            else weights = [0.20, 0.20, 0.20, 0.25, 0.15];
             let r = Math.random(), cum = 0;
             for (let i = 0; i < types.length; i++) {
                 cum += weights[i];
                 if (r <= cum) { c.personality = types[i]; break; }
             }
             if (!c.personality) c.personality = 'Growth';
-            // 配当率をタイプに合わせて初期設定
             let prof = companyTypeProfiles[c.personality];
             c.dividendRate = prof.dividendRate[0] + Math.floor(Math.random() * (prof.dividendRate[1] - prof.dividendRate[0]));
+
+            // 物流・IT専門特化をランダム付与
+            if (c.sector === 'log' && !c.speciality) {
+                const _logSpecs = ['speed','lowcost','global','reliable','food','openCost','eco','tracking','local','finance'];
+                c.speciality = _logSpecs[Math.floor(Math.random() * _logSpecs.length)];
+            }
+            if (c.sector === 'it' && !c.speciality) {
+                const _itSpecs = ['mobile','aiAnalysis','security','payment','marketing','erp','gamification','cloud','stockAI','training'];
+                c.speciality = _itSpecs[Math.floor(Math.random() * _itSpecs.length)];
+            }
         }
 
         const globalNetworkData = {
@@ -1523,7 +1531,7 @@
                 });
             });
 
-            companies = [new Company('player', '👑 My Coffee Inc.', 'player', 20000000, 'coffee', 100, false, 10000)];
+            companies = [new Company('player', '👑 My Coffee Inc.', 'player', 200000000000, 'coffee', 100, false, 10000)];
             companies[0].country = 'JP';
             initAdCompanies();
             initBrandSystem();
@@ -2300,12 +2308,35 @@
             // 🌟 追加：インフラ契約によるボーナス効果を計算
             let infraTrafficBonus = 1.0;
             let infraHrDiscount = 1.0;
+            let infraMissedReduction = 0;
+            let infraCogsDown = 0;
+            let infraSaleBonus = 0;
+            let infraAdBonus = 0;
+            let infraRegularCapBonus = 0;
+            let infraMgrLvBonus = 0;
+            let infrabrandDecayHalf = false;
+            let infraSatisfBonus = 0;
             if (window.getContractTraits && p.contracts) {
-                let logTraits = window.getContractTraits(companies.find(c => c.id === p.contracts.logistics));
-                let itTraits = window.getContractTraits(companies.find(c => c.id === p.contracts.it));
-                infraTrafficBonus = (logTraits?.trafficBonus || 1.0) * (itTraits?.trafficBonus || 1.0);
-                infraHrDiscount = (logTraits?.hrDiscount || 1.0) * (itTraits?.hrDiscount || 1.0);
+                // 国別で現在地の契約先を使う
+                let _activeLogId = p.contracts.logistics;
+                let _activeItId = p.contracts.it;
+                let logTraits = window.getContractTraits(companies.find(c => c.id === _activeLogId));
+                let itTraits  = window.getContractTraits(companies.find(c => c.id === _activeItId));
+                infraTrafficBonus  = (logTraits?.trafficBonus||1.0) * (itTraits?.trafficBonus||1.0);
+                infraHrDiscount    = (logTraits?.hrDiscount||1.0) * (itTraits?.hrDiscount||1.0);
+                infraMissedReduction = (logTraits?.missedReduction||0) + (itTraits?.missedReduction||0);
+                infraCogsDown      = (logTraits?.cogsCostDown||0);
+                infraSaleBonus     = (itTraits?.saleRevenueBonus||0);
+                infraAdBonus       = (itTraits?.adEffectBonus||0);
+                infraRegularCapBonus = (itTraits?.regularCapBonus||0) + (logTraits?.regularCapBonus||0);
+                infraMgrLvBonus    = (itTraits?.mgrLvBonus||0);
+                infrabrandDecayHalf = !!(logTraits?.brandDecayHalf);
+                infraSatisfBonus   = (logTraits?.satisfactionBonus||0);
+                // ブランド減衰半減適用
+                if (infrabrandDecayHalf) p._roasterNoDecay = true;
             }
+            window._infraAdBonus = infraAdBonus;
+            window._infraMgrLvBonus = infraMgrLvBonus;
 
             let districtDemands = {};
             companies.forEach(c => {
@@ -2331,11 +2362,12 @@
                     if (c.id === 'player') {
                         if (typeof techMarketing !== 'undefined' && techMarketing) appeal *= 1.3;
                         if (typeof techApp !== 'undefined' && techApp) appeal *= (1.0 + (typeof appBonus !== 'undefined' ? appBonus : 0));
-                        // 知名度バフ（店舗の国の知名度を適用）
                         let _storeCountry = ({ 'TOKYO': 'JP', 'OSAKA': 'JP', 'USA': 'USA', 'CHINA': 'CHINA', 'UK': 'UK', 'KOREA': 'KOREA', 'AUSTRALIA': 'AUS', 'CANADA': 'CAN', 'FRANCE': 'FRA', 'GERMANY': 'GER', 'INDIA': 'IND' })[s.regionKey] || 'JP';
                         let _awareness = (c.brandAwareness || {})[_storeCountry] || 0;
                         appeal *= getBrandBuff(_awareness);
-                        appeal *= trafficMult * syn.traffic * infraTrafficBonus;
+                        // stats[3] 魅力★ → 集客ボーナス（★5で+10%）
+                        let _charmBonus = (s.hasManager && s.managerData?.stats) ? 1 + s.managerData.stats[3] * 0.02 : 1;
+                        appeal *= trafficMult * syn.traffic * infraTrafficBonus * _charmBonus;
                     } else {
                         appeal *= (1.0 + (c.marketCap / 500000000));
                     }
@@ -3133,6 +3165,15 @@
                         if (c.id !== 'player') s.staffCount = Math.max(1, Math.ceil((finalTraffic - (s.hasManager ? 2000 : 0)) / 1500));
 
                         let maxCapacity = (s.staffCount * 1500) + (s.hasManager ? 2000 : 0);
+                        // 効率stat（stats[4]）: ★5で逃し客-20%相当のキャパ拡張
+                        if (c.id === 'player' && s.hasManager && s.managerData?.stats) {
+                            let effBonus = s.managerData.stats[4] * 0.04; // ★5=+20%
+                            maxCapacity = Math.floor(maxCapacity * (1 + effBonus));
+                        }
+                        // 物流speciality: 逃し客削減
+                        if (c.id === 'player' && infraMissedReduction > 0) {
+                            maxCapacity = Math.floor(maxCapacity * (1 + infraMissedReduction));
+                        }
                         let handledTraffic = Math.min(finalTraffic, maxCapacity);
                         s.missedTraffic = finalTraffic - handledTraffic;
 
@@ -3160,18 +3201,21 @@
                         // contestedTraffic / s.traffic で地区での健闘度を測る
                         let shareRatio = s.traffic > 0 ? Math.min(1, (s.contestedTraffic || 0) / s.traffic) : 0;
                         let share_sat = Math.floor(shareRatio * 30);
-                        // 店長要因: 店長の接客stat (index 0) が高いほど加点（最大20点）
+                        // 店長要因: 接客stat[0]→満足度、魅力stat[3]→集客に別途適用
                         let mgr_sat = 0;
                         if (s.hasManager && s.managerData?.stats) {
                             mgr_sat = s.managerData.stats[0] * 4; // 接客★5=20点
                         }
+                        // 物流speciality: 満足度ボーナス
+                        let _infraSatBonus = (c.id === 'player') ? infraSatisfBonus : 0;
                         // 計算した目標満足度に向けてゆっくり近づく（急変防止）
-                        let targetSat = Math.min(100, Math.floor(price_sat + cap_sat + share_sat + mgr_sat + starSatBonus));
+                        let targetSat = Math.min(100, Math.floor(price_sat + cap_sat + share_sat + mgr_sat + starSatBonus + _infraSatBonus));
                         s.satisfaction = Math.floor((s.satisfaction ?? 60) * 0.7 + targetSat * 0.3);
 
                         // ── 常連客の増減 ──
                         let sat = s.satisfaction;
-                        let maxRegulars = Math.floor(s.traffic * 0.5); // 上限: 基本traffic×50%
+                        let _regCapMult = (c.id === 'player') ? (1 + infraRegularCapBonus) : 1;
+                        let maxRegulars = Math.floor(s.traffic * 0.5 * _regCapMult);
                         if (sat >= 75) {
                             // 高満足: 常連増加（店長育成statボーナス）
                             let growthBonus = s.hasManager && s.managerData?.stats
@@ -3205,21 +3249,27 @@
                                 if (s.regionKey !== 'TOKYO' && s.regionKey !== 'OSAKA') rev = Math.floor(rev * (1 - _fxRate));
                             }
                         }
-                        let baseSalary = 50000 * s.staffCount; if (s.hasManager && s.managerData) baseSalary += s.managerData.baseSalary; if (c.id === 'player') baseSalary = Math.floor(baseSalary * syn.hrCost * infraHrDiscount);
+                        let baseSalary = 50000 * s.staffCount; if (s.hasManager && s.managerData) baseSalary += s.managerData.baseSalary;
+                        if (c.id === 'player') {
+                            // stats[1] 運営★ → 人件費削減（★5で-10%）
+                            let _opsStat = s.hasManager && s.managerData?.stats ? s.managerData.stats[1] : 0;
+                            let _opsDisc = 1 - _opsStat * 0.02;
+                            baseSalary = Math.floor(baseSalary * syn.hrCost * infraHrDiscount * _opsDisc);
+                        }
                         // 🧾 材料費（原価率: デフォルト28%、焙煎機ランクで低下）
                         let rd_cost = c.id === 'player' ? (roasterDefs.find(r => r.id === (p.roasterEquip || {}).id) || roasterDefs[0]) : roasterDefs[0];
-                        let baseCogsRate = 0.28 - (rd_cost.tier || 0) * 0.02; // 焙煎機tier1=26%, tier2=24%...
-                        // 社会保険料: 基本20% + 店舗数規模ボーナス（最大25%）
+                        let baseCogsRate = 0.28 - (rd_cost.tier || 0) * 0.02;
+                        // 食品特化物流 + 運営stat → cogs削減
+                        if (c.id === 'player') baseCogsRate = Math.max(0.10, baseCogsRate - infraCogsDown);
+                        // 社会保険料
                         let _playerStoreCount = c.id === 'player' ? p.stores.length : 0;
                         let _socialRate = c.id === 'player'
                             ? Math.min(0.25, 0.20 + Math.floor(_playerStoreCount / 5) * 0.01)
                             : 0;
                         let socialInsurance = c.id === 'player' ? Math.floor(baseSalary * _socialRate) : 0;
-                        // 光熱費: 家賃の3%（基本固定）+ 客数×200円（繁盛店ほど高い）
                         let utilityCost = c.id === 'player'
                             ? Math.floor((s.rent || 0) * 0.03) + Math.floor(handledTraffic * 200)
                             : 0;
-                        // AIは原価15%固定（プレイヤーは焙煎機ランクで28%→低下）
                         let cogsCost = c.id === 'player'
                             ? Math.floor(rev * Math.max(0.15, baseCogsRate))
                             : Math.floor(rev * 0.15);
@@ -3232,6 +3282,11 @@
                         }
                         let sp = rev - rent - baseSalary - cogsCost - socialInsurance - utilityCost; s.sales = rev; s.customers = handledTraffic;
                         if (c.id === 'player') { pExp += cogsCost + socialInsurance + utilityCost; window._pCogs = (window._pCogs || 0) + cogsCost; window._pSocialIns = (window._pSocialIns || 0) + socialInsurance; window._pUtility = (window._pUtility || 0) + utilityCost; }
+                        // 決済特化IT: 売上×0.5%追加収益
+                        if (c.id === 'player' && infraSaleBonus > 0) {
+                            let _saleExtra = Math.floor(rev * infraSaleBonus);
+                            rev += _saleExtra;
+                        }
 
                         // 💡 修正：未定義エラー防止
                         if (c.id === 'player') {
@@ -5822,7 +5877,10 @@
                 <div class="card" style="border-top: 5px solid ${isPlayer ? 'var(--primary)' : 'var(--text-mut)'}; display:flex; flex-direction:column;">
                     ${ownerBadge}
                     <div class="flex-between" style="margin-bottom:12px;">
-                        <h4 style="margin:0; font-size:16px; font-weight:900;">${st.name}</h4>
+                        <div>
+                            <div style="font-size:10px;color:var(--text-mut);font-weight:800;margin-bottom:2px;">${(()=>{const _cf={'TOKYO':'🇯🇵 JP','OSAKA':'🇯🇵 JP','USA':'🇺🇸 US','CHINA':'🇨🇳 CN','UK':'🇬🇧 UK','KOREA':'🇰🇷 KR','AUSTRALIA':'🇦🇺 AU','CANADA':'🇨🇦 CA','FRANCE':'🇫🇷 FR','GERMANY':'🇩🇪 DE','INDIA':'🇮🇳 IN'};return _cf[st.regionKey]||'🌍';})()}</div>
+                            <h4 style="margin:0; font-size:16px; font-weight:900;">${st.name}</h4>
+                        </div>
                         <span style="background:var(--primary); color:#fff; padding:4px 8px; border-radius:6px; font-size:11px; font-weight:700;">⚡ 魅力: ${st._appeal}</span>
                     </div>
                     ${managerHtml}
@@ -10213,8 +10271,11 @@ ${ds.desc}`)) {
                             <div style="font-size:13px;font-weight:900;color:var(--danger);">¥${Math.floor(salary / 10000).toLocaleString()}万</div>
                         </div>
                     </div>
-                    <div style="background:#f9fafb;border-radius:8px;padding:8px;display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+                    <div style="background:var(--bg);border-radius:8px;padding:8px;display:grid;grid-template-columns:1fr 1fr;gap:4px;">
                         ${statsHtml}
+                    </div>
+                    <div style="margin-top:6px;padding:6px 8px;background:#f0f9ff;border-radius:6px;font-size:10px;color:#0369a1;line-height:1.6;">
+                        接客★→満足度UP | 運営★→人件費DOWN | 育成★→常連増加 | 魅力★→集客UP | 効率★→逃し客DOWN
                     </div>
                     <div style="margin-top:8px;text-align:right;font-size:11px;color:var(--text-mut);font-weight:bold;">
                         集客+${Math.floor((m.bonus.traffic - 1) * 100)}% | 利益率+${Math.floor((m.bonus.margin - 1) * 100)}%
@@ -10330,31 +10391,80 @@ ${ds.desc}`)) {
         // 🌟 企業の特性（個性）を取得する関数：文法エラー(;)を修正済み
         // 🌟 企業の特性（個性）を取得する関数：保険の差別化と表示を強化
         window.getContractTraits = function (co) {
-            if (!co) return { cost: 0, desc: '未契約', trafficBonus: 1.0, hrDiscount: 1.0, cover: 0 };
+            if (!co) return { cost: 0, desc: '未契約', trafficBonus: 1.0, hrDiscount: 1.0, cover: 0, speciality: null };
             let rank = 2;
             if (co.id.endsWith('_0')) rank = 0;
             else if (co.id.endsWith('_1')) rank = 1;
-
-            // 【追加】価格変動マルチプライヤ
             let pm = co.servicePriceMult || 1.0;
-            let pmDesc = pm !== 1.0 ? ` (${pm > 1 ? '+' : ''}${Math.round((pm - 1) * 100)}%価格)` : '';
 
+            // 物流10種
             if (co.sector === 'log') {
-                if (rank === 0) return { cost: Math.floor(120000 * pm), trafficBonus: 1.10, hrDiscount: 1.0, cover: 0, desc: '👑 高品質' + pmDesc + ' (集客+10%)' };
-                if (rank === 1) return { cost: Math.floor(80000 * pm), trafficBonus: 1.05, hrDiscount: 1.0, cover: 0, desc: '🚚 標準' + pmDesc + ' (集客+5%)' };
-                return { cost: Math.floor(50000 * pm), trafficBonus: 1.0, hrDiscount: 1.0, cover: 0, desc: '💸 格安' + pmDesc + ' (ボーナス無)' };
+                let baseCost = rank === 0 ? 120000 : rank === 1 ? 80000 : 50000;
+                let base = { cost: Math.floor(baseCost * pm), trafficBonus: 1.0, hrDiscount: 1.0, cover: 0,
+                    missedReduction: 0, openCostDisc: 0, brandDecayHalf: false, cogsCostDown: 0,
+                    loanRateDown: 0, satisfactionBonus: 0, localTrafficBonus: 0, speciality: co.speciality || null };
+                const _specs = {
+                    speed:    { icon:'🚀', name:'スピード特化',   eff:'逃し客-20%',          apply: t => { t.missedReduction = 0.20; } },
+                    lowcost:  { icon:'💰', name:'低コスト',        eff:'費用-30%・集客ボーナス無', apply: t => { t.cost = Math.floor(t.cost * 0.70); } },
+                    global:   { icon:'🌍', name:'グローバル対応', eff:'海外出店コスト-20%',   apply: t => { t.openCostDisc = 0.20; } },
+                    reliable: { icon:'🔒', name:'高信頼',          eff:'配送トラブル無効化',   apply: t => { t.blockLogCrisis = true; } },
+                    food:     { icon:'📦', name:'食品特化',        eff:'材料費-3%',            apply: t => { t.cogsCostDown = 0.03; } },
+                    openCost: { icon:'🏪', name:'店舗支援',        eff:'出店初期費用-15%',     apply: t => { t.openCostDisc = 0.15; } },
+                    eco:      { icon:'♻️', name:'エコ物流',        eff:'ブランド減衰-50%',     apply: t => { t.brandDecayHalf = true; } },
+                    tracking: { icon:'📡', name:'リアルタイム追跡',eff:'満足度+5',             apply: t => { t.satisfactionBonus = 5; } },
+                    local:    { icon:'🤝', name:'地域密着',        eff:'同地区集客+10%',       apply: t => { t.localTrafficBonus = 0.10; t.trafficBonus = 1.10; } },
+                    finance:  { icon:'💼', name:'法人特化',        eff:'借入金利-0.5%',        apply: t => { t.loanRateDown = 0.005; } },
+                };
+                if (co.speciality && _specs[co.speciality]) {
+                    let s = _specs[co.speciality];
+                    s.apply(base);
+                    base.desc = `${s.icon} ${s.name} (${s.eff})`;
+                } else {
+                    base.trafficBonus = rank === 0 ? 1.10 : rank === 1 ? 1.05 : 1.0;
+                    base.desc = rank === 0 ? '👑 高品質 (集客+10%)' : rank === 1 ? '🚚 標準 (集客+5%)' : '💸 格安';
+                }
+                base._specLabel = co.speciality && _specs[co.speciality] ? `${_specs[co.speciality].icon} ${_specs[co.speciality].name}` : '';
+                return base;
             }
+
+            // IT10種
             if (co.sector === 'it') {
-                if (rank === 0) return { cost: Math.floor(80000 * pm), trafficBonus: 1.0, hrDiscount: 0.85, cover: 0, desc: '🤖 AI管理' + pmDesc + ' (人件費-15%)' };
-                return { cost: Math.floor(50000 * pm), trafficBonus: 1.05, hrDiscount: 1.0, cover: 0, desc: '📊 分析' + pmDesc + ' (集客+5%)' };
+                let baseCost = rank === 0 ? 80000 : 50000;
+                let base = { cost: Math.floor(baseCost * pm), trafficBonus: 1.0, hrDiscount: 1.0, cover: 0,
+                    missedReduction: 0, adEffectBonus: 0, regularCapBonus: 0, saleRevenueBonus: 0,
+                    globalCostDisc: 0, dividendBonus: 0, mgrLvBonus: 0, blockCyberCrisis: false, speciality: co.speciality || null };
+                const _specs = {
+                    mobile:      { icon:'📱', name:'モバイル特化',  eff:'常連客増加+20%',       apply: t => { t.regularCapBonus = 0.20; } },
+                    aiAnalysis:  { icon:'🤖', name:'AI分析',        eff:'競合情報が常時表示',   apply: t => { t.showCompetitor = true; } },
+                    security:    { icon:'🔐', name:'セキュリティ',  eff:'サイバー攻撃無効化',   apply: t => { t.blockCyberCrisis = true; } },
+                    payment:     { icon:'💳', name:'決済特化',      eff:'売上×0.5%追加収益',   apply: t => { t.saleRevenueBonus = 0.005; } },
+                    marketing:   { icon:'📊', name:'マーケ特化',    eff:'広告効果+30%',         apply: t => { t.adEffectBonus = 0.30; } },
+                    erp:         { icon:'🧮', name:'ERP',           eff:'人件費-5%',            apply: t => { t.hrDiscount = 0.95; } },
+                    gamification:{ icon:'🎮', name:'ゲーミフィケーション',eff:'常連客上限+20%', apply: t => { t.regularCapBonus = 0.20; } },
+                    cloud:       { icon:'🌐', name:'クラウド基盤',  eff:'複数国展開コスト-10%', apply: t => { t.globalCostDisc = 0.10; } },
+                    stockAI:     { icon:'📈', name:'株式分析AI',    eff:'配当収入+10%',         apply: t => { t.dividendBonus = 0.10; } },
+                    training:    { icon:'🔧', name:'カスタマイズ',  eff:'店長Lv速度+25%',       apply: t => { t.mgrLvBonus = 0.25; } },
+                };
+                if (co.speciality && _specs[co.speciality]) {
+                    let s = _specs[co.speciality];
+                    s.apply(base);
+                    base.desc = `${s.icon} ${s.name} (${s.eff})`;
+                } else {
+                    base.hrDiscount = rank === 0 ? 0.85 : 1.0;
+                    base.trafficBonus = rank === 0 ? 1.0 : 1.05;
+                    base.desc = rank === 0 ? '🤖 AI管理 (人件費-15%)' : '📊 分析 (集客+5%)';
+                }
+                base._specLabel = co.speciality && _specs[co.speciality] ? `${_specs[co.speciality].icon} ${_specs[co.speciality].name}` : '';
+                return base;
             }
+
             if (co.sector === 'ins') {
-                // 🛡️ 損害保険：配送・ITと同スケールのコスト（店舗数×単価）
-                if (rank === 0) return { cost: Math.floor(100000 * pm), trafficBonus: 1.0, hrDiscount: 1.0, cover: 1.0, desc: '👑 フル' + pmDesc + ` (100%補償 / ¥${Math.floor(10 * pm)}万/店)` };
-                if (rank === 1) return { cost: Math.floor(60000 * pm), trafficBonus: 1.0, hrDiscount: 1.0, cover: 0.7, desc: '⚖️ 標準' + pmDesc + ` (70%補償 / ¥${Math.floor(6 * pm)}万/店)` };
-                return { cost: Math.floor(30000 * pm), trafficBonus: 1.0, hrDiscount: 1.0, cover: 0.3, desc: '💸 格安' + pmDesc + ` (30%補償 / ¥${Math.floor(3 * pm)}万/店)` };
+                let pm2 = co.servicePriceMult || 1.0;
+                if (rank === 0) return { cost: Math.floor(100000 * pm2), trafficBonus: 1.0, hrDiscount: 1.0, cover: 1.0, desc: `👑 フル (100%補償 / ¥${Math.floor(10 * pm2)}万/店)` };
+                if (rank === 1) return { cost: Math.floor(60000 * pm2), trafficBonus: 1.0, hrDiscount: 1.0, cover: 0.7, desc: `⚖️ 標準 (70%補償 / ¥${Math.floor(6 * pm2)}万/店)` };
+                return { cost: Math.floor(30000 * pm2), trafficBonus: 1.0, hrDiscount: 1.0, cover: 0.3, desc: `💸 格安 (30%補償 / ¥${Math.floor(3 * pm2)}万/店)` };
             }
-            return { cost: Math.floor(50000 * pm), desc: '標準' + pmDesc, trafficBonus: 1.0, hrDiscount: 1.0, cover: 0 };
+            return { cost: Math.floor(50000 * pm), desc: '標準', trafficBonus: 1.0, hrDiscount: 1.0, cover: 0 };
         };
 
         // 【追加】新規店舗設立時のIT・運送へのロイヤリティ（費用5%）支払い
