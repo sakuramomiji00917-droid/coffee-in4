@@ -2131,6 +2131,10 @@
             window._pAdSpend = 0; // 広告費追跡
             // IPO審査チェック（毎週）
             if (typeof window.checkIPOCompletion === 'function') window.checkIPOCompletion();
+            // ロビー結果チェック（毎週）
+            if (typeof window.checkLobbyResult === 'function') window.checkLobbyResult();
+            // ロビー効果の期限切れ処理
+            if (p._lobbyEffects) p._lobbyEffects = p._lobbyEffects.filter(e => e.endWeek > week);
             let totalInfraPaid = 0, totalInfraSaved = 0;
             let trend = Math.sin(week / 5) * 0.02;
 
@@ -2620,11 +2624,12 @@
                     let country = _cMapInfra[st.regionKey] || 'JP';
                     if (_infraProcessed[country]) return; _infraProcessed[country] = true;
                     let storesInCountry = p.stores.filter(s => (_cMapInfra[s.regionKey]||'JP') === country).length;
+                    let _subDisc = (typeof window.getLobbyEffect==='function' && window.getLobbyEffect('sub')) ? 0.80 : 1.0;
                     [['logByCountry','log','logistics'],['itByCountry','it','it']].forEach(([byKey,secKey,globalKey]) => {
                         let coId = (p.contracts[byKey]?.[country]) || p.contracts[globalKey];
                         let contractor = coId ? companies.find(c => c.id === coId && !c.isBankrupt) : null;
                         let traits = window.getContractTraits ? window.getContractTraits(contractor) : { cost: 50000 };
-                        let cost = traits.cost * storesInCountry;
+                        let cost = Math.floor(traits.cost * storesInCountry * _subDisc);
                         if (contractor && cost > 0) {
                             if (contractor.parent) { contractor.cash += cost; contractor.qNet = (contractor.qNet||0)+cost; if (contractor.parent==='player') totalInfraSaved += cost; }
                             else { p.cash -= cost; contractor.cash += cost; contractor.qNet = (contractor.qNet||0)+cost; contractor.lastRevenue=(contractor.lastRevenue||0)+cost; contractor.lastExpense=(contractor.lastExpense||0)+Math.floor(cost*0.45); contractor.lastProfit=contractor.lastRevenue-contractor.lastExpense; totalInfraPaid += cost; pExp += cost; }
@@ -3309,14 +3314,16 @@
                             if (Math.random() < 0.30) { delete c._aiInsCo; }
                         }
 
-                        // IT契約先を決定（なければランダム選択）
+                        // IT契約先を決定（同国優先）
                         if (!c._aiItCo || !companies.find(x=>x.id===c._aiItCo&&!x.isBankrupt)) {
-                            let pool = companies.filter(bx=>bx.sector==='it'&&!bx.isBankrupt);
+                            let pool = companies.filter(bx=>bx.sector==='it'&&!bx.isBankrupt&&(bx.country===(c.country||'JP')||!bx.country));
+                            if (!pool.length) pool = companies.filter(bx=>bx.sector==='it'&&!bx.isBankrupt);
                             c._aiItCo = pool.length > 0 ? pool[Math.floor(Math.random()*pool.length)].id : null;
                         }
-                        // 物流契約先
+                        // 物流契約先（同国優先）
                         if (!c._aiLogCo || !companies.find(x=>x.id===c._aiLogCo&&!x.isBankrupt)) {
-                            let pool = companies.filter(bx=>bx.sector==='log'&&!bx.isBankrupt);
+                            let pool = companies.filter(bx=>bx.sector==='log'&&!bx.isBankrupt&&(bx.country===(c.country||'JP')||!bx.country));
+                            if (!pool.length) pool = companies.filter(bx=>bx.sector==='log'&&!bx.isBankrupt);
                             c._aiLogCo = pool.length > 0 ? pool[Math.floor(Math.random()*pool.length)].id : null;
                         }
                         // 保険契約先（同国優先）
@@ -3933,7 +3940,8 @@
                     pNet -= consumptionTax;
                     window._pConsumptionTax = consumptionTax;
                     // 法人税
-                    let currentTaxRate = Math.max(0, (playerLobbyBonusTurns > 0 ? 0.10 : globalTaxRate) - (cfo ? cfo.level * 0.05 : 0));
+                    let _taxLobby = (typeof window.getLobbyEffect === 'function' && window.getLobbyEffect('tax')) || playerLobbyBonusTurns > 0;
+                    let currentTaxRate = Math.max(0, (_taxLobby ? globalTaxRate - 0.10 : globalTaxRate) - (cfo ? cfo.level * 0.05 : 0));
                     pTax = Math.max(0, Math.floor(pNet * currentTaxRate));
                     pNet -= pTax;
                 }
@@ -4264,7 +4272,7 @@
             playerTotalDividends += pDiv; p.cash += pDiv;
             if (p.isPublic) {
                 let _pFloat = window.getFloatShares ? window.getFloatShares(p) : p.shares;
-                let otherKeys = Object.keys(p.shareholders).filter(k => k !== 'player' && k !== p.id);
+                let otherKeys = Object.keys(p.shareholders).filter(k => k !== 'player' && k !== p.id && k !== 'market');
                 let maxOtherShare = otherKeys.length > 0 ? Math.max(...otherKeys.map(k => p.shareholders[k])) : 0;
                 if (maxOtherShare > _pFloat * 0.5) { isGameOver = true; alert("【GAME OVER】特定の企業に株式の過半数を握られ、買収されました。"); }
             }
@@ -6858,7 +6866,10 @@ ${ds.desc}`)) {
         window.executeExpansion = function (regionKey, distName, propIndex) {
             const p = companies[0], dist = globalNetworkData[regionKey].districts.find(d => d.name === distName), prop = dist.properties[propIndex];
             if (prop.coffeeTenant !== null) return;
-            const cost = prop.rent * 2;
+            const _isOverseas = !['TOKYO','OSAKA'].includes(regionKey);
+            const _regDisc = (typeof window.getLobbyEffect==='function' && window.getLobbyEffect('reg')) ? 0.70 : 1.0;
+            const _overDisc = (_isOverseas && typeof window.getLobbyEffect==='function' && window.getLobbyEffect('over')) ? 0.75 : 1.0;
+            const cost = Math.floor(prop.rent * 2 * _regDisc * _overDisc);
             if (p.cash < cost) return alert(`資金不足！必要: ¥${cost.toLocaleString()}`);
             if (!confirm(`出店しますか？\n初期費用: ¥${cost.toLocaleString()}`)) return;
             p.cash -= cost; prop.coffeeTenant = 1;
@@ -7113,7 +7124,42 @@ ${ds.desc}`)) {
                         <div style="font-size:12px;color:var(--text-mut);margin-top:6px;">融資上限2倍 / TOB防衛権あり / 株主総会あり</div>
                     </div>`}
                     <div class="card"><div class="card-header">💰 配当性向 (%)</div><div style="font-size:24px; font-weight:900; color:var(--primary); text-align:center; margin-bottom:10px;"><span id="disp-div-rate">${p.dividendRate || 0}</span>%</div><input type="range" min="0" max="100" value="${p.dividendRate || 0}" oninput="document.getElementById('disp-div-rate').innerText=this.value" onchange="updateDivRateFinal(this.value)"></div>
-                    <div class="card"><div class="card-header">🏛️ 政治献金 (ロビー)</div><div style="display:flex; gap:10px; margin-bottom:10px;"><input type="number" id="lobby-input" value="5000" step="1000" style="flex:1;"><b>万円</b></div><button class="btn-dark btn-large" onclick="doLobbying()">献金して減税(10%)を獲得</button></div>
+                    <div class="card" style="grid-column: 1 / -1;">
+                        <div class="card-header">🏛️ 政治ロビー活動</div>
+                        ${(() => {
+                            let activeEffects = (p._lobbyEffects || []).filter(e => e.endWeek > week);
+                            let pendingLobby = p._lobbyPending;
+                            let effectsHtml = activeEffects.length > 0
+                                ? activeEffects.map(e => `<span style="background:#d1fae5;color:#065f46;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:900;margin-right:4px;">${e.label}（残り${e.endWeek - week}週）</span>`).join('')
+                                : '<span style="color:var(--text-mut);font-size:12px;">なし</span>';
+                            let pendingHtml = pendingLobby
+                                ? `<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:12px;font-weight:900;color:#92400e;">⏳ 審査中: ${pendingLobby.label}（あと${pendingLobby.resultWeek - week}週で判明）</div>`
+                                : '';
+                            const pkgs = [
+                                { id:'tax',   icon:'🏦', name:'減税措置',    cost:300000000, base:0.30, desc:'法人税 -10% / 12週間' },
+                                { id:'reg',   icon:'🏗️', name:'規制緩和',    cost:200000000, base:0.25, desc:'出店コスト -30% / 24週間' },
+                                { id:'sub',   icon:'📦', name:'輸送補助金',  cost:150000000, base:0.40, desc:'インフラ費用 -20% / 16週間' },
+                                { id:'over',  icon:'🌍', name:'海外進出支援', cost:250000000, base:0.25, desc:'海外家賃・出店 -25% / 20週間' },
+                                { id:'def',   icon:'🛡️', name:'買収防衛法',  cost:500000000, base:0.15, desc:'敵対TOB無効化 1回限り' },
+                                { id:'anti',  icon:'⚖️', name:'独禁法免除',  cost:800000000, base:0.08, desc:'同業TOB否決リスクゼロ / 8週間' },
+                                { id:'smear', icon:'📰', name:'風評操作',    cost: 80000000, base:0.45, desc:'競合1社の株価 -15%（翌週）' },
+                            ];
+                            let pkgHtml = pkgs.map(pk => {
+                                let canAfford = p.cash >= pk.cost;
+                                let isActive = activeEffects.some(e => e.id === pk.id);
+                                return `<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;background:${isActive?'#f0fdf4':'#fff'};">
+                                    <div style="font-size:18px;flex-shrink:0;">${pk.icon}</div>
+                                    <div style="flex:1;min-width:0;">
+                                        <div style="font-weight:900;font-size:13px;">${pk.name} <span style="font-size:10px;color:var(--text-mut);">${pk.desc}</span></div>
+                                        <div style="font-size:10px;color:var(--text-mut);">基本成功率 ${Math.round(pk.base*100)}% | ¥${Math.floor(pk.cost/10000).toLocaleString()}万〜</div>
+                                    </div>
+                                    ${isActive ? '<span style="font-size:10px;background:#10b981;color:#fff;padding:2px 6px;border-radius:8px;font-weight:900;">有効中</span>'
+                                    : `<button class="btn-dark" style="font-size:11px;padding:6px 10px;flex-shrink:0;" ${!canAfford||pendingLobby?'disabled':''} onclick="openLobbyModal('${pk.id}')">工作開始</button>`}
+                                </div>`;
+                            }).join('');
+                            return `<div style="margin-bottom:8px;font-size:12px;">有効な効果: ${effectsHtml}</div>${pendingHtml}${pkgHtml}`;
+                        })()}
+                    </div>
                     ${!p.isPublic ? '' : `<div class="card" style="grid-column: 1 / -1;"><div class="card-header">📈 公募増資 (自社株発行)</div>
                         <div style="display:flex; gap:20px; align-items:center; margin-bottom:12px;">
                             <div style="flex:1;">
@@ -7515,11 +7561,166 @@ ${ds.desc}`)) {
             updateBankUI(); updateDashboard();
         };
         window.updateDivRateFinal = function (val) { companies[0].dividendRate = parseInt(val); };
+        // ==========================================
+        // 🏛️ 政治ロビー活動システム
+        // ==========================================
+        const _lobbyPkgs = {
+            tax:   { icon:'🏦', name:'減税措置',    cost:300000000, base:0.30, desc:'法人税 -10% / 12週間' },
+            reg:   { icon:'🏗️', name:'規制緩和',    cost:200000000, base:0.25, desc:'出店コスト -30% / 24週間' },
+            sub:   { icon:'📦', name:'輸送補助金',  cost:150000000, base:0.40, desc:'インフラ費用 -20% / 16週間' },
+            over:  { icon:'🌍', name:'海外進出支援', cost:250000000, base:0.25, desc:'海外家賃・出店 -25% / 20週間' },
+            def:   { icon:'🛡️', name:'買収防衛法',  cost:500000000, base:0.15, desc:'敵対TOB無効化 1回限り' },
+            anti:  { icon:'⚖️', name:'独禁法免除',  cost:800000000, base:0.08, desc:'同業TOB否決リスクゼロ / 8週間' },
+            smear: { icon:'📰', name:'風評操作',    cost: 80000000, base:0.45, desc:'競合1社の株価 -15%（翌週）' },
+        };
+
+        window.openLobbyModal = function(pkgId) {
+            let p = companies[0];
+            let pkg = _lobbyPkgs[pkgId];
+            if (!pkg) return;
+            let modalsArea = document.getElementById('modals-area');
+            let ex = document.getElementById('lobby-pkg-modal'); if (ex) ex.remove();
+            let cfo = (hiredExecs||[]).find(e => e.role === 'CFO');
+            let cfoBonusStr = cfo ? '<span style="color:#10b981;font-size:11px;">CFO在籍: +10%</span>' : '';
+            modalsArea.insertAdjacentHTML('beforeend', `
+            <div id="lobby-pkg-modal" class="modal-overlay" style="z-index:10055;">
+              <div class="modal-content" style="max-width:400px;">
+                <div style="font-size:22px;font-weight:900;margin-bottom:4px;">${pkg.icon} ${pkg.name}</div>
+                <div style="color:var(--text-mut);font-size:12px;margin-bottom:16px;">${pkg.desc}</div>
+                <div style="background:var(--bg);border-radius:8px;padding:12px;margin-bottom:14px;font-size:12px;">
+                  <div class="flex-between" style="margin-bottom:6px;"><span>基本成功率</span><span style="font-weight:900;">${Math.round(pkg.base*100)}%</span></div>
+                  <div class="flex-between" style="margin-bottom:6px;"><span>最低献金額</span><span>¥${Math.floor(pkg.cost/10000).toLocaleString()}万</span></div>
+                  <div class="flex-between" style="margin-bottom:4px;"><span>追加献金（¥1億ごとに+5%、上限+20%）</span>${cfoBonusStr}</div>
+                  <div style="font-size:11px;color:#f59e0b;margin-top:6px;">⚠️ 失敗時: 却下40% / 情報漏洩30%(株価-15%) / スキャンダル20%(株価-25%・ブランド-30%・資産の10%罰金) / 政府調査10%(資産5%罰金+4週M&A禁止)</div>
+                  <div style="font-size:11px;color:#ef4444;margin-top:4px;">🔴 成功後も毎週5%のリークリスク（累積献金多いほど上昇）</div>
+                </div>
+                <div style="margin-bottom:12px;">
+                  <label style="font-size:12px;font-weight:bold;">追加献金額（万円）</label>
+                  <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+                    <input type="number" id="lobby-extra-input" value="0" min="0" step="1000" style="flex:1;border:2px solid var(--border);border-radius:8px;padding:8px;">
+                    <span style="font-size:12px;">万円</span>
+                  </div>
+                  <div style="font-size:11px;color:var(--text-mut);margin-top:4px;">合計: ¥<span id="lobby-total-disp">${Math.floor(pkg.cost/10000).toLocaleString()}</span>万 | 成功率: <span id="lobby-rate-disp" style="font-weight:900;color:var(--primary);">${Math.round(pkg.base*100)}%</span> <span id="lobby-bonus-disp" style="color:#10b981;font-size:11px;"></span></div>
+                </div>
+                <script>
+                  document.getElementById('lobby-extra-input').oninput = function() {
+                    let extra = (parseInt(this.value)||0)*10000;
+                    let total = ${pkg.cost} + extra;
+                    let extraSteps = Math.floor(extra/100000000);
+                    let extraBonus = Math.min(0.20, extraSteps*0.05);
+                    let cfoBonus = ${cfo ? 0.10 : 0};
+                    let rate = Math.min(0.95, ${pkg.base} + extraBonus + cfoBonus);
+                    document.getElementById('lobby-total-disp').textContent = Math.floor(total/10000).toLocaleString();
+                    document.getElementById('lobby-rate-disp').textContent = Math.round(rate*100)+'%';
+                    let bonusParts = [];
+                    if (extraBonus > 0) bonusParts.push('+'+Math.round(extraBonus*100)+'%（追加献金）');
+                    if (cfoBonus > 0) bonusParts.push('+'+Math.round(cfoBonus*100)+'%（CFO）');
+                    document.getElementById('lobby-bonus-disp').textContent = bonusParts.length ? '（内訳: '+bonusParts.join(' / ')+'）' : '';
+                  };
+                <\/script>
+                <button class="btn-primary btn-large" style="border-radius:10px;margin-bottom:8px;" onclick="executeLobby('${pkgId}')">🏛️ 工作開始（2週後に判明）</button>
+                <button class="btn-outline" style="width:100%;border-radius:10px;" onclick="closeModal('lobby-pkg-modal')">キャンセル</button>
+              </div>
+            </div>`);
+            document.getElementById('lobby-pkg-modal').style.display = 'flex';
+        };
+
+        window.executeLobby = function(pkgId) {
+            let p = companies[0];
+            let pkg = _lobbyPkgs[pkgId];
+            if (!pkg) return;
+            let extra = (parseInt(document.getElementById('lobby-extra-input')?.value)||0)*10000;
+            let totalCost = pkg.cost + extra;
+            if (p.cash < totalCost) return alert('資金不足です！');
+            let cfo = (hiredExecs||[]).find(e => e.role === 'CFO');
+            let extraBonus = Math.min(0.20, Math.floor(extra/100000000)*0.05);
+            let cfoBonus = cfo ? 0.10 : 0;
+            let finalRate = Math.min(0.95, pkg.base + extraBonus + cfoBonus);
+            p.cash -= totalCost;
+            p._lobbyPending = { id: pkgId, label: pkg.name, cost: totalCost, rate: finalRate, resultWeek: week + 2 };
+            p._lobbyCumulative = (p._lobbyCumulative || 0) + totalCost;
+            addLog(`【政治】${pkg.name} の工作を開始。¥${Math.floor(totalCost/10000).toLocaleString()}万を投じました。2週後に結果が判明します。`, 'normal', '政治');
+            closeModal('lobby-pkg-modal');
+            updateDashboard(); renderPortfolio();
+        };
+
+        // 週次ロビー結果チェック（executeTurnから呼ぶ）
+        window.checkLobbyResult = function() {
+            let p = companies[0];
+            if (!p._lobbyPending || p._lobbyPending.resultWeek > week) return;
+            let pending = p._lobbyPending;
+            delete p._lobbyPending;
+            let pkg = _lobbyPkgs[pending.id];
+
+            if (Math.random() < pending.rate) {
+                // 成功
+                if (!p._lobbyEffects) p._lobbyEffects = [];
+                // 効果適用
+                const _durations = { tax:12, reg:24, sub:16, over:20, def:999, anti:8, smear:1 };
+                p._lobbyEffects.push({ id: pending.id, label: pkg.name, endWeek: week + (_durations[pending.id]||12) });
+                // 即時効果
+                if (pending.id === 'smear') {
+                    let rivals = companies.filter(c => c.sector==='coffee' && c.id!=='player' && !c.isBankrupt && c.isPublic);
+                    if (rivals.length > 0) {
+                        let target = rivals[Math.floor(Math.random()*rivals.length)];
+                        target.stockPrice = Math.floor(target.stockPrice * 0.85);
+                        target.marketCap = target.stockPrice * target.shares;
+                        addLog(`【政治】風評操作が成功。${target.name.replace(/\[.*?\]\s*/,'')} の株価が急落しました。`, 'success', '政治');
+                    }
+                } else {
+                    addLog(`【政治】${pkg.icon} ${pkg.name} が成功しました！効果は${_durations[pending.id]}週間継続します。`, 'success', '政治');
+                }
+            } else {
+                // 失敗
+                let r = Math.random();
+                let totalAssets = p.cash + Object.values(p.deposits||{}).reduce((s,v)=>s+v,0);
+                if (r < 0.40) {
+                    addLog(`【政治】${pkg.name} は却下されました。献金は戻りません。`, 'alert', '政治');
+                } else if (r < 0.70) {
+                    let penalty = Math.floor(p.stockPrice * 0.15);
+                    p.stockPrice = Math.max(10, Math.floor(p.stockPrice * 0.85));
+                    p.marketCap = p.stockPrice * p.shares;
+                    addLog(`【政治スキャンダル】${pkg.name} の工作が情報漏洩！株価が急落しました。`, 'alert', '政治');
+                } else if (r < 0.90) {
+                    let fine = Math.floor(totalAssets * 0.10);
+                    p.cash = Math.max(0, p.cash - fine);
+                    p.stockPrice = Math.max(10, Math.floor(p.stockPrice * 0.75));
+                    p.marketCap = p.stockPrice * p.shares;
+                    Object.keys(p.brandAwareness||{}).forEach(c => { p.brandAwareness[c] = Math.max(0, (p.brandAwareness[c]||0) - 30); });
+                    addLog(`【重大スキャンダル】${pkg.name} の工作が発覚！罰金¥${Math.floor(fine/10000).toLocaleString()}万・株価暴落・ブランド毀損。`, 'alert', '政治');
+                } else {
+                    let fine = Math.floor(totalAssets * 0.05);
+                    p.cash = Math.max(0, p.cash - fine);
+                    p._maaBanWeeks = week + 4;
+                    addLog(`【政府調査】${pkg.name} の工作が政府に察知されました！罰金¥${Math.floor(fine/10000).toLocaleString()}万・4週間M&A禁止。`, 'alert', '政治');
+                }
+            }
+
+            // 成功後のリークチェック
+            (p._lobbyEffects||[]).forEach(eff => {
+                if (eff.endWeek <= week) return;
+                let leakRate = 0.05 + Math.min(0.15, (p._lobbyCumulative||0) / 5000000000 * 0.10);
+                if (Math.random() < leakRate) {
+                    p.stockPrice = Math.max(10, Math.floor(p.stockPrice * 0.90));
+                    p.marketCap = p.stockPrice * p.shares;
+                    Object.keys(p.brandAwareness||{}).forEach(c => { p.brandAwareness[c] = Math.max(0, (p.brandAwareness[c]||0) - 15); });
+                    addLog(`【情報漏洩】${eff.label} の工作情報がリークしました。株価・ブランドに影響。`, 'alert', '政治');
+                }
+            });
+
+            updateDashboard(); renderPortfolio();
+        };
+
+        // ロビー効果を適用するヘルパー（executeTurnから参照）
+        window.getLobbyEffect = function(effectId) {
+            let p = companies[0];
+            if (!p._lobbyEffects) return false;
+            return p._lobbyEffects.some(e => e.id === effectId && e.endWeek > week);
+        };
+
         window.doLobbying = function () {
-            let amt = parseInt(document.getElementById('lobby-input').value) * 10000;
-            if (isNaN(amt) || companies[0].cash < amt || amt < 10000000) return alert('資金不足または1000万未満です');
-            companies[0].cash -= amt; playerLobbyBonusTurns += Math.floor(amt / 5000000);
-            addLog(`【政治】献金により特別減税を獲得！`, 'success', '政治'); updateDashboard(); renderPortfolio();
+            // 旧関数（後方互換）
+            openLobbyModal('tax');
         };
         window.handleBank = function (action) {
             let amt = parseInt(document.getElementById('bank-input').value) * 10000, p = companies[0];
@@ -10247,7 +10448,10 @@ ${ds.desc}`)) {
             const _buildCountrySelect = (secKey, contractByCountry, icon, label, changeFn) => {
                 if (activeCountries.length === 0) return `<div style="font-size:12px;color:var(--text-mut);text-align:center;padding:10px;">出店なし</div>`;
                 return activeCountries.map(country => {
-                    let candidates = companies.filter(c => c.sector === secKey && !c.isBankrupt);
+                    let allCandidates = companies.filter(c => c.sector === secKey && !c.isBankrupt);
+                    // 同国企業を優先表示、なければグローバル全社
+                    let domestic = allCandidates.filter(c => c.country === country || !c.country);
+                    let candidates = domestic.length > 0 ? domestic : allCandidates;
                     let currentId = (contractByCountry || {})[country];
                     let currentCo = companies.find(c => c.id === currentId);
                     let traits = window.getContractTraits(currentCo);
@@ -10259,11 +10463,14 @@ ${ds.desc}`)) {
                         let t = window.getContractTraits(c); let isSub = c.parent==='player';
                         return `<option value="${c.id}" ${currentId===c.id?'selected':''}>${isSub?'👑 ':''}${c.name.replace(/\[.*?\]\s*/,'')} [${t.desc}]</option>`;
                     }).join('');
+                    // 現在の選択が同国外なら警告表示
+                    let wrongCountry = currentCo && currentCo.country && currentCo.country !== country && domestic.length > 0;
                     return `<div style="margin-bottom:8px;border-bottom:1px dashed var(--border);padding-bottom:6px;">
                         <div class="flex-between" style="margin-bottom:4px;">
                             <span style="font-size:12px;font-weight:bold;">${countryFlags[country]||''} ${country} (${countInCountry}店)</span>
                             <b style="font-size:11px;color:${isOwned?'var(--success)':'var(--danger)'};">${isOwned?'還流中':'-¥'+(cost/10000).toLocaleString()+'万'}</b>
                         </div>
+                        ${wrongCountry?`<div style="font-size:10px;color:#f59e0b;margin-bottom:3px;">⚠️ 現在の契約先は${country}外の企業です</div>`:''}
                         <select onchange="${changeFn}('${country}',this.value)" style="width:100%;padding:5px;font-size:11px;border-radius:4px;border:1px solid var(--border);">${opts}</select>
                     </div>`;
                 }).join('');
@@ -11123,6 +11330,10 @@ ${ds.desc}`)) {
         window.startAdvancedTOB = function (targetId, price, sharesToBuy) {
             let target = companies.find(c => c.id === targetId);
             let p = companies[0];
+            // 政府調査によるM&A禁止チェック
+            if (p._maaBanWeeks && week <= p._maaBanWeeks) {
+                return alert(`政府調査中のためM&A・TOBは禁止されています。（あと${p._maaBanWeeks - week}週）`);
+            }
             let totalCost = price * sharesToBuy;
 
             // ── 資金が足りない場合の緊急調達 ──
