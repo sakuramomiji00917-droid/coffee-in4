@@ -988,6 +988,18 @@
         };
         window.getCountryBadge = function (country) { return countryBadge[country] || ''; };
 
+        // 金庫株ヘルパー: 浮動株数（金庫株・自己株を除いた実質流通株）
+        window.getFloatShares = function(co) {
+            let treasury = (co.shareholders && co.shareholders[co.id]) || 0;
+            return Math.max(0, co.shares - treasury);
+        };
+        // 金庫株ヘルパー: 過半数取得に必要な株数（浮動株ベース）
+        window.getMajorityTarget = function(co, currentHeld) {
+            let floatShares = window.getFloatShares(co);
+            let needed = Math.floor(floatShares * 0.51) + 1;
+            return Math.max(0, needed - (currentHeld || 0));
+        };
+
         const aiCompanyNames = {
             'JP': {
                 'coffee': ['ドトール', 'コメダ珈琲', 'サンマルク', 'Pronto', '星乃珈琲'],
@@ -1511,7 +1523,7 @@
                 });
             });
 
-            companies = [new Company('player', '👑 My Coffee Inc.', 'player', 20000000, 'coffee', 100, false, 10000)];
+            companies = [new Company('player', '👑 My Coffee Inc.', 'player', 200000000000, 'coffee', 100, false, 10000)];
             companies[0].country = 'JP';
             initAdCompanies();
             initBrandSystem();
@@ -2744,24 +2756,12 @@
                         }
                     });
 
-                    // 預かり総額を保存（財務表示・流動性管理用）
+                    // 預かり総額を保存（財務表示用）
                     c._custodyTotal = totalDepositsReceived;
-                    // 流動性比率チェック（預かり金に対してcashが10%未満で警戒）
+                    // 流動性比率は表示のみ（クライシストリガーは廃止）
                     if (totalDepositsReceived > 0) {
                         let liquidityRatio = c.cash / totalDepositsReceived;
-                        if (liquidityRatio < 0.10 && week % 4 === 0) {
-                            c._liquidityStress = (c._liquidityStress || 0) + 1;
-                            if (c._liquidityStress >= 4 && !window._sectorCrisis?.pending) {
-                                window._sectorCrisis = window._sectorCrisis || {};
-                                window._sectorCrisis.pending = {
-                                    ...sectorCrisisEvents.find(e => e.sector === 'bank'),
-                                    hintWeek: week, triggerWeek: week + 1
-                                };
-                                addLog(`【流動性警告】${c.name.replace(/\[.*?\]\s*/,'')} の流動性比率が危険水準（${(liquidityRatio*100).toFixed(1)}%）に低下。取り付けリスクが高まっている。`, 'alert', '経済');
-                            }
-                        } else {
-                            c._liquidityStress = Math.max(0, (c._liquidityStress || 0) - 1);
-                        }
+                        c._liquidityRatio = liquidityRatio; // 表示用のみ保存
                     }
 
                     // 預金の75%を貸出・国債・投資に配分
@@ -3057,7 +3057,8 @@
                         let regularsTraffic = Math.floor(s.regulars || 0);
                         let finalTraffic = (s.contestedTraffic || s.traffic) + regularsTraffic;
                         let rent = s.rent; const d = globalNetworkData[s.regionKey]?.districts.find(dx => dx.name === s.location);
-                        if (d && d.properties[s.propIndex]?.owner === c.id) { rent = 0; } else if (c.id === 'player') { let cooRentDisc = coo ? (coo.level * 0.05) : 0; rent = Math.floor(rent * (1.0 - cooRentDisc) * syn.rent); }
+                        // 自社所有物件への出店は家賃ゼロ（AI・プレイヤー共通）
+                        if (d && d.properties[s.propIndex]?.owner === (c.id === 'player' ? 'player' : c.id)) { rent = 0; } else if (c.id === 'player') { let cooRentDisc = coo ? (coo.level * 0.05) : 0; rent = Math.floor(rent * (1.0 - cooRentDisc) * syn.rent); }
 
                         if (c.id !== 'player') s.staffCount = Math.max(1, Math.ceil((finalTraffic - (s.hasManager ? 2000 : 0)) / 1500));
 
@@ -3122,6 +3123,18 @@
                             if (repairCost > 0) { p.cash -= repairCost; pExp += repairCost; window._pRepair = (window._pRepair || 0) + repairCost; }
                         }
                         let price = s.price || 1500; let rev = Math.floor(handledTraffic * price * (Math.random() * 0.2 + 0.9)); // finalTrafficからhandledTrafficに変更
+                        // クライシスペナルティ
+                        if (c.id === 'player') {
+                            if (p._scandalWeeks && week <= p._scandalWeeks) rev = Math.floor(rev * 0.5);
+                            if (p._strikeWeeks && week <= p._strikeWeeks) rev = Math.floor(rev * 0.4);
+                            if (p._cyberStopWeeks && week <= p._cyberStopWeeks) rev = 0;
+                            if (s._disasterWeeks && week <= s._disasterWeeks) rev = Math.floor(rev * 0.5);
+                            // 為替ショック（海外店舗のみ）
+                            if (p._forexShockWeeks && week <= p._forexShockWeeks) {
+                                let _fxRate = p._forexShockRate || 0.40;
+                                if (s.regionKey !== 'TOKYO' && s.regionKey !== 'OSAKA') rev = Math.floor(rev * (1 - _fxRate));
+                            }
+                        }
                         let baseSalary = 50000 * s.staffCount; if (s.hasManager && s.managerData) baseSalary += s.managerData.baseSalary; if (c.id === 'player') baseSalary = Math.floor(baseSalary * syn.hrCost * infraHrDiscount);
                         // 🧾 材料費（原価率: デフォルト28%、焙煎機ランクで低下）
                         let rd_cost = c.id === 'player' ? (roasterDefs.find(r => r.id === (p.roasterEquip || {}).id) || roasterDefs[0]) : roasterDefs[0];
@@ -3810,7 +3823,8 @@
                             // 必ずTOBプロセスを経由させる（検討→即買収を廃止）
                             let premiumPct = 20 + Math.floor(Math.random() * 30); // 20〜50%プレミアム
                             let premiumPrice = Math.floor(tgt.stockPrice * (1 + premiumPct / 100));
-                            let targetShares = Math.floor((tgt.shares || 10000) * 0.51) + 1;
+                            let _tgtFloat = window.getFloatShares ? window.getFloatShares(tgt) : Math.floor((tgt.shares||10000)*0.99);
+                            let targetShares = Math.floor(_tgtFloat * 0.51) + 1;
                             let currentHolding = (tgt.shareholders || {})[c.id] || 0;
                             let sharesToBuy = Math.max(0, targetShares - currentHolding);
                             let totalCost = premiumPrice * sharesToBuy;
@@ -3933,7 +3947,7 @@
                             // 証券会社は3倍の確率でTOB（業種問わず）
                             let _tobProb = isSecurities ? 0.025 : 0.008;
                             if (!target.activeTOB_v2 && _tobCoolOk && Math.random() < _tobProb) {
-                                let premiumPrice = Math.floor(target.stockPrice * 1.3), targetShares = Math.floor(target.shares * 0.51) + 1, sharesToBuy = Math.max(0, targetShares - currentShares), totalCost = premiumPrice * sharesToBuy;
+                                let _tFloat = window.getFloatShares ? window.getFloatShares(target) : Math.floor((target.shares)*0.99); let premiumPrice = Math.floor(target.stockPrice * 1.3), targetShares = Math.floor(_tFloat * 0.51) + 1, sharesToBuy = Math.max(0, targetShares - currentShares), totalCost = premiumPrice * sharesToBuy;
                                 if (sharesToBuy > 0 && (c.cash + c.marketCap * 0.3) >= totalCost) {
 
                                     // 🚨 【新規】大株主なら「議決キュー」に送る、それ以外は自動判定
@@ -4091,13 +4105,37 @@
                                 let newBidPct = ((c.shareholders[bidderId] || 0) / c.shares * 100).toFixed(1);
                                 addLog(`【ポイズンピル発動】${c.name.replace(/\[.*?\]\s*/, '')} がTOBに対抗し新株20%発行。${bidName} の持株比率が ${(bidderPct * 100).toFixed(1)}% → ${newBidPct}% に希薄化。買収コストが急増。`, 'alert', 'M&A');
                                 // TOBの必要取得株数も再計算
-                                let needed = Math.floor(c.shares * 0.51) + 1;
+                                let needed = Math.floor(window.getFloatShares ? window.getFloatShares(c) : c.shares * 0.99, 1) * 0.51 + 1; needed = Math.floor(needed);
                                 let nowHas = c.shareholders[bidderId] || 0;
                                 c.activeTOB_v2.targetShares = Math.max(0, needed - nowHas);
                             }
                         }
                         // ポイズンピルフラグはTOBが終わったらリセット
                         if (!c.activeTOB_v2 && c._poisonPillUsed) delete c._poisonPillUsed;
+
+                        // 🛡 金庫株防衛: TOB進行中、自社株買いで浮動株を減らし買収を困難に
+                        if (c.activeTOB_v2 && !c._poisonPillUsed && c.parent !== 'player' && Math.random() < 0.25) {
+                            let bidderId = c.activeTOB_v2.bidder;
+                            let bidderPct = (c.shareholders[bidderId] || 0) / c.shares;
+                            let currentTreasury = c.shareholders[c.id] || 0;
+                            let treasuryPct = currentTreasury / c.shares;
+                            // 金庫株が25%未満かつ資金に余裕があれば追加買い
+                            if (treasuryPct < 0.25 && c.cash >= c.stockPrice * 1000) {
+                                let defBuyShares = Math.min(
+                                    Math.floor(c.shares * 0.05),
+                                    Math.floor(c.cash * 0.2 / c.stockPrice)
+                                );
+                                if (defBuyShares > 0) {
+                                    c.cash -= defBuyShares * c.stockPrice;
+                                    c.shareholders[c.id] = currentTreasury + defBuyShares;
+                                    // 浮動株が減ったのでTOBの必要取得株数を再計算
+                                    let _newNeeded = Math.floor(window.getFloatShares(c) * 0.51) + 1;
+                                    let _nowHas = c.shareholders[bidderId] || 0;
+                                    c.activeTOB_v2.targetShares = Math.max(0, _newNeeded - _nowHas);
+                                    addLog(`【買収防衛】${c.name.replace(/\[.*?\]\s*/,'')} が自社株買い（金庫株${(c.shareholders[c.id]/c.shares*100).toFixed(1)}%）で買収を困難化。`, 'news', 'M&A');
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -4155,7 +4193,12 @@
             });
 
             playerTotalDividends += pDiv; p.cash += pDiv;
-            if (p.isPublic) { let otherKeys = Object.keys(p.shareholders).filter(k => k !== 'player'); let maxOtherShare = otherKeys.length > 0 ? Math.max(...otherKeys.map(k => p.shareholders[k])) : 0; if (maxOtherShare > p.shares * 0.5) { isGameOver = true; alert("【GAME OVER】特定の企業に株式の過半数を握られ、買収されました。"); } }
+            if (p.isPublic) {
+                let _pFloat = window.getFloatShares ? window.getFloatShares(p) : p.shares;
+                let otherKeys = Object.keys(p.shareholders).filter(k => k !== 'player' && k !== p.id);
+                let maxOtherShare = otherKeys.length > 0 ? Math.max(...otherKeys.map(k => p.shareholders[k])) : 0;
+                if (maxOtherShare > _pFloat * 0.5) { isGameOver = true; alert("【GAME OVER】特定の企業に株式の過半数を握られ、買収されました。"); }
+            }
 
             // 🔄 企業の新陳代謝（コーヒー以外のみ新規参入）
             if (Math.random() < 0.2) {
@@ -4321,6 +4364,272 @@
                 }
             }
 
+            // ==========================================
+            // 🚨 プレイヤー向けクライシスイベント（8種）
+            // ==========================================
+            if (!window._playerCrisis) window._playerCrisis = {};
+            const _pStores = p.stores ? p.stores.length : 0;
+            const _pSubs = companies.filter(c => c.parent === 'player').length;
+            const _pCash = p.cash;
+            // A・D・H用: 総流動資産（現金＋預金）
+            const _pTotalLiquid = p.cash + Object.values(p.deposits || {}).reduce((s, v) => s + v, 0) + (p.termDeposits || []).reduce((s, td) => s + td.amount, 0);
+            const _pCap = p.marketCap || 1;
+            // クールダウン確認 & 同時発生なし
+            if (!window._playerCrisis.active && week > 12) {
+                let _crisisCandidates = [];
+
+                // A. 巨額訴訟
+                if (_pStores >= 20 || _pCap >= 5000000000) {
+                    let _coolA = window._playerCrisis.lastA || 0;
+                    if (week - _coolA >= 48 && Math.random() < 0.008)
+                        _crisisCandidates.push({ id:'A' });
+                }
+                // B. 食品スキャンダル
+                if (_pStores >= 10) {
+                    let _coolB = window._playerCrisis.lastB || 0;
+                    if (week - _coolB >= 36 && Math.random() < 0.006)
+                        _crisisCandidates.push({ id:'B' });
+                }
+                // C. 設備改修命令
+                if (_pStores >= 30) {
+                    let _coolC = window._playerCrisis.lastC || 0;
+                    if (week - _coolC >= 96 && Math.random() < 0.004)
+                        _crisisCandidates.push({ id:'C' });
+                }
+                // D. サイバー攻撃
+                if (_pSubs >= 3 || _pCash >= 5000000000) {
+                    let _coolD = window._playerCrisis.lastD || 0;
+                    if (week - _coolD >= 52 && Math.random() < 0.005)
+                        _crisisCandidates.push({ id:'D' });
+                }
+                // E. 為替ショック
+                if (p.stores && p.stores.some(s => s.regionKey !== 'TOKYO' && s.regionKey !== 'OSAKA')) {
+                    let _coolE = window._playerCrisis.lastE || 0;
+                    if (week - _coolE >= 24 && Math.random() < 0.007)
+                        _crisisCandidates.push({ id:'E' });
+                }
+                // F. ストライキ
+                if (_pStores >= 15) {
+                    let _coolF = window._playerCrisis.lastF || 0;
+                    if (week - _coolF >= 40 && Math.random() < 0.006)
+                        _crisisCandidates.push({ id:'F' });
+                }
+                // G. 自然災害
+                {
+                    let _coolG = window._playerCrisis.lastG || 0;
+                    if (week - _coolG >= 72 && Math.random() < 0.004)
+                        _crisisCandidates.push({ id:'G' });
+                }
+                // H. 不正会計
+                if (_pSubs >= 3) {
+                    let _coolH = window._playerCrisis.lastH || 0;
+                    if (week - _coolH >= 48 && Math.random() < 0.005)
+                        _crisisCandidates.push({ id:'H' });
+                }
+
+                if (_crisisCandidates.length > 0) {
+                    let chosen = _crisisCandidates[Math.floor(Math.random() * _crisisCandidates.length)];
+                    window._playerCrisis.active = chosen.id;
+                    window._playerCrisis['last' + chosen.id] = week;
+                    setTimeout(() => {
+                        if (typeof window.showPlayerCrisisModal === 'function')
+                            window.showPlayerCrisisModal(chosen.id);
+                    }, 600);
+                }
+            }
+
+            window.showPlayerCrisisModal = function(crisisId) {
+                let p = companies[0];
+                let modalsArea = document.getElementById('modals-area');
+                let ex = document.getElementById('player-crisis-modal');
+                if (ex) ex.remove();
+
+                const crisisDefs = {
+                    A: {
+                        icon:'⚖️', title:'巨額訴訟', color:'#dc2626',
+                        body: `競合他社から知的財産侵害で訴えられました。`,
+                        choices: [
+                            { label:'💰 和解する', desc:`¥${Math.floor(_pTotalLiquid*0.08/10000).toLocaleString()}万 を支払って決着`, action: () => {
+                                let cost = Math.floor(_pTotalLiquid * 0.08); p.cash -= cost;
+                                addLog(`【訴訟】和解金 ¥${Math.floor(cost/10000).toLocaleString()}万 を支払い解決しました。`, 'warning', '自社');
+                            }},
+                            { label:'⚔️ 争う（4週後に判決）', desc:'勝訴50%→無料 / 敗訴→¥2倍負担', action: () => {
+                                p._lawsuitWeek = week + 4; p._lawsuitCost = Math.floor(_pTotalLiquid * 0.16);
+                                addLog(`【訴訟】法廷闘争を選択。${week+4}週に判決が下ります。`, 'alert', '自社');
+                            }}
+                        ]
+                    },
+                    B: {
+                        icon:'🦠', title:'食品スキャンダル', color:'#d97706',
+                        body: `自社店舗で食中毒が報告されました。全店舗売上が4週間50%ダウンし、ブランド知名度が-30%低下します。`,
+                        choices: [
+                            { label:'📢 即時謝罪会見（PR費 ¥2億）', desc:'ブランドダメージを半減させる', action: () => {
+                                if (p.cash >= 200000000) { p.cash -= 200000000; p._scandalWeeks = week + 2; } else { p._scandalWeeks = week + 4; }
+                                Object.keys(p.brandAwareness||{}).forEach(k => { p.brandAwareness[k] = Math.max(0, (p.brandAwareness[k]||0) - 15); });
+                                addLog(`【スキャンダル】謝罪会見を実施。売上が2週間50%ダウン。ブランド知名度-15%。`, 'alert', '自社');
+                            }},
+                            { label:'🤐 隠蔽（リスク大）', desc:'発覚確率50%→発覚時ダメージ3倍', action: () => {
+                                if (Math.random() < 0.5) {
+                                    p._scandalWeeks = week + 6;
+                                    Object.keys(p.brandAwareness||{}).forEach(k => { p.brandAwareness[k] = Math.max(0, (p.brandAwareness[k]||0) - 45); });
+                                    let fine = Math.floor(p.cash * 0.15); p.cash -= fine;
+                                    addLog(`【スキャンダル】隠蔽が発覚！売上6週間50%ダウン、罰金¥${Math.floor(fine/10000).toLocaleString()}万、ブランド知名度-45%。`, 'alert', '自社');
+                                } else {
+                                    addLog(`【スキャンダル】隠蔽に成功。今のところ表面化していない。`, 'normal', '自社');
+                                }
+                            }}
+                        ]
+                    },
+                    C: {
+                        icon:'🏗️', title:'設備改修命令', color:'#7c3aed',
+                        body: `政府が飲食店に新衛生基準を発令。全店舗の改修が義務付けられます。`,
+                        choices: [
+                            { label:`🔨 即時改修（¥${Math.floor(_pStores*7500000/10000).toLocaleString()}万）`, desc:'1店舗 ¥750万 × ' + _pStores + '店舗', action: () => {
+                                let cost = _pStores * 7500000; p.cash -= cost;
+                                addLog(`【規制】全${_pStores}店舗を改修。¥${Math.floor(cost/10000).toLocaleString()}万 支出。`, 'warning', '自社');
+                            }},
+                            { label:'📅 分割払い（4週で均等支払い）', desc:'週ごとに25%ずつ支払い', action: () => {
+                                p._renovWeekly = Math.floor(_pStores * 7500000 / 4);
+                                p._renovLeft = 4;
+                                addLog(`【規制】改修費を4週分割払いに。毎週 ¥${Math.floor(p._renovWeekly/10000).toLocaleString()}万 支出。`, 'warning', '自社');
+                            }}
+                        ]
+                    },
+                    D: {
+                        icon:'💻', title:'サイバー攻撃', color:'#0f172a',
+                        body: `本社システムがハッキングされ顧客データが流出。賠償と復旧に多額のコストが発生します。`,
+                        choices: [
+                            { label:`💸 即時対応（賠償+復旧 ¥${Math.floor(_pTotalLiquid*0.06/10000).toLocaleString()}万）`, desc:'1〜2週売上停止だが迅速解決', action: () => {
+                                let cost = Math.floor(_pTotalLiquid * 0.06); p.cash -= cost;
+                                p._cyberStopWeeks = week + 2;
+                                addLog(`【サイバー攻撃】賠償・復旧費 ¥${Math.floor(cost/10000).toLocaleString()}万 支出。2週間売上停止。`, 'alert', '自社');
+                            }},
+                            { label:'🛡️ セキュリティ強化投資（¥3億）', desc:'長期免疫: 次回Dイベントを48週延長', action: () => {
+                                let cost = 300000000; if (p.cash >= cost) { p.cash -= cost; window._playerCrisis.lastD = week + 48; }
+                                p._cyberStopWeeks = week + 1;
+                                addLog(`【サイバー攻撃】セキュリティ強化に ¥${Math.floor(cost/10000).toLocaleString()}万 投資。1週停止後に復旧。`, 'warning', '自社');
+                            }}
+                        ]
+                    },
+                    E: {
+                        icon:'💱', title:'為替ショック', color:'#0369a1',
+                        body: `急激な為替変動により海外店舗の売上が6週間40%減少。外貨建て負債がある場合は追加返済コストが発生します。`,
+                        choices: [
+                            { label:'📉 甘受する', desc:'6週間、海外店舗売上-40%', action: () => {
+                                p._forexShockWeeks = week + 6;
+                                addLog(`【為替ショック】海外店舗売上が6週間40%減少します。`, 'alert', '自社');
+                            }},
+                            { label:`🔒 為替ヘッジ（¥${Math.floor(_pCash*0.03/10000).toLocaleString()}万）`, desc:'損失を2週・20%減に抑制', action: () => {
+                                let cost = Math.floor(p.cash * 0.03); p.cash -= cost;
+                                p._forexShockWeeks = week + 2; p._forexShockRate = 0.20;
+                                addLog(`【為替ショック】ヘッジ費用 ¥${Math.floor(cost/10000).toLocaleString()}万。2週間、海外売上-20%に軽減。`, 'warning', '自社');
+                            }}
+                        ]
+                    },
+                    F: {
+                        icon:'✊', title:'大型ストライキ', color:'#b45309',
+                        body: `従業員組合が賃上げ15%を要求してストライキを宣言しました。`,
+                        choices: [
+                            { label:'✅ 要求を受け入れる', desc:'人件費が永続+15%。即時解決', action: () => {
+                                p._wageHike = (p._wageHike || 1.0) * 1.15;
+                                addLog(`【ストライキ】賃上げ15%を受け入れ。人件費が永続的に15%増加。`, 'warning', '自社');
+                            }},
+                            { label:'❌ 拒否して対決', desc:'4週間売上-60%。その後自然終了', action: () => {
+                                p._strikeWeeks = week + 4;
+                                addLog(`【ストライキ】拒否。4週間、全店舗売上が60%減少します。`, 'alert', '自社');
+                            }}
+                        ]
+                    },
+                    G: {
+                        icon:'🌪️', title:'巨大自然災害', color:'#475569',
+                        body: `大規模災害が発生。被害は保険加入状況により大きく異なります。`,
+                        choices: [
+                            { label:'🏥 保険で対応', desc:`保険加入済みなら70%カバー、未加入は全額負担`, action: () => {
+                                let insured = !!(p.insurance);
+                                let baseDmg = Math.floor(p.cash * 0.12);
+                                let dmg = insured ? Math.floor(baseDmg * 0.30) : baseDmg;
+                                p.cash -= dmg;
+                                p.stores && p.stores.forEach(s => { s._disasterWeeks = week + 3; });
+                                addLog(`【自然災害】店舗被害発生。損失 ¥${Math.floor(dmg/10000).toLocaleString()}万（${insured?'保険適用70%カバー':'無保険・全額負担'}）。3週間売上低下。`, 'alert', '自社');
+                            }},
+                            { label:'📋 政府支援申請（2週待ち）', desc:'¥1億の補助金を2週後に受取', action: () => {
+                                let baseDmg = Math.floor(p.cash * 0.10); p.cash -= baseDmg;
+                                p._govAidWeek = week + 2;
+                                p.stores && p.stores.forEach(s => { s._disasterWeeks = week + 3; });
+                                addLog(`【自然災害】損失 ¥${Math.floor(baseDmg/10000).toLocaleString()}万。政府支援申請済み（2週後 ¥1億受取予定）。`, 'warning', '自社');
+                            }}
+                        ]
+                    },
+                    H: {
+                        icon:'📋', title:'子会社不正会計発覚', color:'#991b1b',
+                        body: `傘下企業で粉飾決算が発覚。子会社の株価が50%暴落し、親会社（自社）にも監督責任が問われます。`,
+                        choices: [
+                            { label:'🔍 自主調査・公表', desc:`罰金 ¥${Math.floor(Math.min(_pTotalLiquid*0.05,3000000000)/10000).toLocaleString()}万。株価-10%。信頼回復`, action: () => {
+                                let rogue = companies.filter(c=>c.parent==='player'&&!c.isBankrupt)[0];
+                                if (rogue) { rogue.stockPrice = Math.max(10,Math.floor(rogue.stockPrice*0.5)); }
+                                let fine = Math.min(Math.floor(_pTotalLiquid*0.05),3000000000); p.cash -= fine;
+                                p.stockPrice = Math.max(10,Math.floor(p.stockPrice*0.9));
+                                addLog(`【不正会計】自主公表。罰金¥${Math.floor(fine/10000).toLocaleString()}万、自社株価-10%。`, 'warning', '自社');
+                            }},
+                            { label:'🤐 もみ消し工作', desc:'成功50%→無料。失敗→罰金3倍+株価-30%', action: () => {
+                                if (Math.random() < 0.5) {
+                                    addLog(`【不正会計】もみ消しに成功。今期は表面化を回避。`, 'normal', '自社');
+                                } else {
+                                    let rogue = companies.filter(c=>c.parent==='player'&&!c.isBankrupt)[0];
+                                    if (rogue) rogue.stockPrice = Math.max(10,Math.floor(rogue.stockPrice*0.5));
+                                    let fine = Math.min(Math.floor(_pTotalLiquid*0.15),10000000000); p.cash -= fine;
+                                    p.stockPrice = Math.max(10,Math.floor(p.stockPrice*0.7));
+                                    addLog(`【不正会計】もみ消しが発覚！罰金¥${Math.floor(fine/10000).toLocaleString()}万、自社株価-30%。`, 'alert', '自社');
+                                }
+                            }}
+                        ]
+                    }
+                };
+
+                let def = crisisDefs[crisisId];
+                if (!def) { window._playerCrisis.active = null; return; }
+                let choicesHtml = def.choices.map((ch, i) => `
+                    <button onclick="window._resolveCrisis(${i})" style="width:100%;margin-bottom:10px;background:${i===0?'#059669':'#1e293b'};color:#fff;border:1px solid #334155;border-radius:10px;padding:14px 16px;text-align:left;cursor:pointer;font-size:13px;">
+                        <div style="font-weight:900;margin-bottom:3px;">${ch.label}</div>
+                        <div style="font-size:11px;color:#94a3b8;">${ch.desc}</div>
+                    </button>`).join('');
+
+                modalsArea.insertAdjacentHTML('beforeend', `
+                <div id="player-crisis-modal" class="modal-overlay" style="z-index:10060;background:rgba(0,0,0,0.88);">
+                  <div class="modal-content" style="max-width:460px;background:#0f172a;color:#fff;border:3px solid ${def.color};box-shadow:0 0 40px ${def.color}66;">
+                    <div style="text-align:center;margin-bottom:18px;">
+                      <div style="font-size:48px;margin-bottom:8px;">${def.icon}</div>
+                      <div style="font-size:11px;font-weight:900;color:${def.color};letter-spacing:3px;margin-bottom:4px;">CRISIS EVENT</div>
+                      <div style="font-size:22px;font-weight:900;">${def.title}</div>
+                    </div>
+                    <div style="background:#1e293b;border-left:4px solid ${def.color};border-radius:8px;padding:14px;margin-bottom:20px;font-size:13px;line-height:1.6;">${def.body}</div>
+                    <div>${choicesHtml}</div>
+                  </div>
+                </div>`);
+                document.getElementById('player-crisis-modal').style.display = 'flex';
+
+                window._resolveCrisis = function(choiceIdx) {
+                    def.choices[choiceIdx].action();
+                    closeModal('player-crisis-modal');
+                    window._playerCrisis.active = null;
+                    updateDashboard();
+                };
+            };
+
+            // 訴訟判決処理
+            if (p._lawsuitWeek && week >= p._lawsuitWeek) {
+                let cost = p._lawsuitCost || 0;
+                if (Math.random() < 0.5) { addLog(`【訴訟判決】勝訴！賠償金なし。`, 'success', '自社'); }
+                else { p.cash -= cost; addLog(`【訴訟判決】敗訴。賠償金 ¥${Math.floor(cost/10000).toLocaleString()}万 を支払いました。`, 'alert', '自社'); }
+                delete p._lawsuitWeek; delete p._lawsuitCost;
+            }
+            // 設備改修分割払い処理
+            if (p._renovLeft > 0) { p.cash -= (p._renovWeekly || 0); p._renovLeft--; if(p._renovLeft===0) addLog(`【規制】設備改修費の支払い完了。`, 'success', '自社'); }
+            // 政府支援金
+            if (p._govAidWeek && week >= p._govAidWeek) { p.cash += 100000000; addLog(`【政府支援】補助金 ¥1億 を受け取りました。`, 'success', '自社'); delete p._govAidWeek; }
+            // スキャンダル売上ペナルティ（週次処理でフラグを参照）
+            // _scandalWeeks / _strikeWeeks / _cyberStopWeeks / _forexShockWeeks / _disasterWeeks は各週の売上計算側で参照
+
             let cashBeforeProp = p.cash; let marketEvent = null;
             if (Math.random() < 0.08) {
                 marketEvent = realEstateEvents[Math.floor(Math.random() * realEstateEvents.length)];
@@ -4396,17 +4705,21 @@
                         }
                         prop.currentValue = Math.floor(prop.currentValue * fluctuation);
                         if (!prop.owner) return; let ownerCo = companies.find(c => c.id === prop.owner); if (!ownerCo) return;
-                        if (prop.coffeeTenant !== null && prop.coffeeTenant !== 1) { ownerCo.cash += prop.rent; ownerCo.qNet = (ownerCo.qNet || 0) + prop.rent; }
+                        // コーヒーテナント家賃（自社(player)所有物件に自社出店の場合は収入なし）
+                        if (prop.coffeeTenant !== null && prop.coffeeTenant !== 1) {
+                            // coffeeTenant===1はプレイヤー店舗。オーナーがプレイヤー自身なら内部取引なのでスキップ
+                            if (!(prop.owner === 'player' && prop.coffeeTenant === 1)) {
+                                ownerCo.cash += prop.rent; ownerCo.qNet = (ownerCo.qNet || 0) + prop.rent;
+                            }
+                        }
                         if (prop.npcSlots > 0) {
                             if (!prop.tenantList) prop.tenantList = [];
-                            // 地区の同業種平均家賃と比較して入退去確率を変動
                             let distRef = Object.values(globalNetworkData).flatMap(r => r.districts).find(d => d.properties.includes(prop));
                             let avgRentInDist = distRef ? Math.floor(distRef.properties.filter(x => x.type === prop.type).reduce((s, x) => s + x.rent, 0) / Math.max(1, distRef.properties.filter(x => x.type === prop.type).length)) : prop.rent;
                             let rentRatio = prop.rent / (avgRentInDist || prop.rent);
-                            // 入居確率: 安い(0.7以下)→20%, 普通→10%, 高い(1.3以上)→3%
+                            // B: 退去確率を引き上げ（高家賃ペナルティ強化）
                             let moveInProb = rentRatio < 0.7 ? 0.20 : rentRatio > 1.3 ? 0.03 : 0.10;
-                            // 退去確率: 安い→1%, 普通→3%, 高い→12%
-                            let moveOutProb = rentRatio > 1.3 ? 0.12 : rentRatio < 0.7 ? 0.01 : 0.03;
+                            let moveOutProb = rentRatio > 1.3 ? 0.20 : rentRatio < 0.7 ? 0.02 : 0.07;
 
                             if (prop.occupiedNPCSlots < prop.npcSlots && Math.random() < moveInProb) {
                                 prop.occupiedNPCSlots++;
@@ -4424,8 +4737,51 @@
                                     if (prop.owner === 'player') addLog(`【不動産】${departed} があなたのビルを退去しました。${rentRatio > 1.3 ? '(家賃が高すぎたようです)' : ''}`, 'warning', '不動産');
                                 }
                             }
-                            // NPCテナント: 1社入居ごとに設定家賃×1倍（入居数が多いほど倍増）
                             let _npcRentIncome = Math.floor(prop.rent * prop.occupiedNPCSlots); ownerCo.cash += _npcRentIncome; ownerCo.qNet = (ownerCo.qNet || 0) + _npcRentIncome;
+                        }
+
+                        // ── 不動産維持コスト（プレイヤー所有物件のみ）──
+                        if (prop.owner === 'player') {
+                            let propVal = prop.currentValue || (prop.rent * 500);
+                            let totalSlots = 1 + (prop.npcSlots || 0);
+                            // 固定資産税: 時価の0.03%/週
+                            let propertyTax = Math.floor(propVal * 0.0003);
+                            // 維持費: 家賃×12%×全スロット数
+                            let maintenanceCost = Math.floor(prop.rent * 0.12 * totalSlots);
+                            // 空室コスト: 空きスロット×¥20万
+                            let coffeeVacant = (prop.coffeeTenant === null) ? 1 : 0;
+                            let npcVacant = Math.max(0, (prop.npcSlots || 0) - (prop.occupiedNPCSlots || 0));
+                            let vacancyCost = (coffeeVacant + npcVacant) * 200000;
+                            p.cash -= (propertyTax + maintenanceCost + vacancyCost);
+
+                            // E: 不動産所得税: 家賃収入の25%
+                            let grossRent = prop.rent * (prop.coffeeTenant !== null && prop.coffeeTenant !== 1 ? 1 : 0)
+                                          + prop.rent * (prop.occupiedNPCSlots || 0);
+                            let rentTax = Math.floor(grossRent * 0.25);
+                            if (rentTax > 0) p.cash -= rentTax;
+
+                            // D: 大規模修繕（48週ごとに0.4%）
+                            if (week - (prop._lastRepairWeek || 0) >= 48 && Math.random() < 0.004) {
+                                let repairCost = Math.floor(propVal * (0.05 + Math.random() * 0.05));
+                                p.cash -= repairCost;
+                                prop._lastRepairWeek = week;
+                                addLog(`【大規模修繕】物件で大規模修繕が必要に。¥${Math.floor(repairCost/10000).toLocaleString()}万 を支出しました。`, 'warning', '不動産');
+                            }
+                        }
+
+                        // ── AI家賃自動調整（全所有者・空室率に応じて）──
+                        if (prop.owner !== 'player' && prop.npcSlots > 0 && week % 4 === 0) {
+                            let totalSlotsAI = 1 + prop.npcSlots;
+                            let occupiedSlotsAI = (prop.coffeeTenant !== null ? 1 : 0) + (prop.occupiedNPCSlots || 0);
+                            let vacancyRate = 1 - occupiedSlotsAI / totalSlotsAI;
+                            if (vacancyRate >= 0.5) {
+                                // 空室50%以上 → 家賃5〜10%値下げ
+                                let cut = 0.05 + Math.random() * 0.05;
+                                prop.rent = Math.max(50000, Math.floor(prop.rent * (1 - cut)));
+                            } else if (vacancyRate === 0) {
+                                // 満室 → 家賃3〜5%値上げ
+                                prop.rent = Math.floor(prop.rent * (1.03 + Math.random() * 0.02));
+                            }
                         }
                     });
                 });
@@ -4693,14 +5049,11 @@
                                     let cost = buybackShares * (c.stockPrice||100);
                                     if (c.cash >= cost) {
                                         c.cash -= cost;
-                                        // 市場株を消却（各株主から按分で減少）
-                                        c.shares = Math.max(1, (c.shares||10000) - buybackShares);
-                                        for (let sid in c.shareholders) {
-                                            c.shareholders[sid] = Math.floor((c.shareholders[sid]||0) * 0.90);
-                                        }
-                                        // 株価上昇（需給改善）
+                                        // 金庫株方式: 発行済株数はそのまま、自己保有として記録
+                                        c.shareholders[c.id] = (c.shareholders[c.id] || 0) + buybackShares;
+                                        // 浮動株から減らす（市場の需給改善）
                                         c.stockPrice = Math.floor((c.stockPrice||100) * 1.08);
-                                        addLog(`【自社株買い】${c.name.replace(/\[.*?\]\s*/,'')} が ${buybackShares.toLocaleString()}株を買い戻し。株価↑ ¥${c.stockPrice.toLocaleString()}`, 'success', 'M&A');
+                                        addLog(`【自社株買い】${c.name.replace(/\[.*?\]\s*/,'')} が ${buybackShares.toLocaleString()}株を金庫株として取得。株価↑ ¥${c.stockPrice.toLocaleString()}（自己保有${((c.shareholders[c.id]/c.shares)*100).toFixed(1)}%）`, 'success', 'M&A');
                                     }
                                 }
                             },
@@ -4731,14 +5084,44 @@
                                     let subs = companies.filter(sub => sub.parent === c.id && !sub.isBankrupt);
                                     if (subs.length === 0) { addLog(`【売却不可】${c.name.replace(/\[.*?\]\s*/,'')} には売却できる子会社がありません。`, 'warning', 'M&A'); return; }
                                     let target = subs[Math.floor(Math.random() * subs.length)];
-                                    let bidders = companies.filter(b => !b.isBankrupt && b.id !== c.id && b.id !== 'player' && b.cash >= target.marketCap * 0.5);
-                                    if (bidders.length === 0) { addLog(`【売却不成立】${target.name.replace(/\[.*?\]\s*/,'')} の買い手が見つかりませんでした。`, 'warning', 'M&A'); return; }
-                                    let buyer = bidders.reduce((a,b) => b.cash > a.cash ? b : a);
-                                    let price = Math.floor(target.marketCap * (0.9 + Math.random() * 0.4));
-                                    c.cash += price; buyer.cash -= price;
-                                    target.parent = buyer.id;
-                                    target.name = `[${buyer.name.replace(/\[.*?\]\s*/,'').slice(0,4)}傘下] ${target.name.replace(/\[.*?\]\s*/,'')}`;
-                                    addLog(`【子会社売却】${c.name.replace(/\[.*?\]\s*/,'')} が ${target.name.replace(/\[.*?\]\s*/,'')} を ${buyer.name.replace(/\[.*?\]\s*/,'')} に ¥${Math.floor(price/10000).toLocaleString()}万 で売却。`, 'success', 'M&A');
+                                    let basePrice = Math.floor(target.marketCap * (0.9 + Math.random() * 0.4));
+                                    let bidders = companies.filter(b => !b.isBankrupt && b.id !== c.id && b.id !== 'player' && b.cash >= basePrice);
+                                    let topBidder = bidders.length > 0 ? bidders.reduce((a,b) => b.cash > a.cash ? b : a) : null;
+                                    let topBid = topBidder ? Math.floor(basePrice * (1 + Math.random() * 0.15)) : basePrice;
+                                    let p = companies[0];
+                                    // プレイヤー参加モーダル
+                                    let modalsArea = document.getElementById('modals-area');
+                                    let existing = document.getElementById('auction-modal');
+                                    if (existing) existing.remove();
+                                    modalsArea.insertAdjacentHTML('beforeend', `
+                                    <div id="auction-modal" class="modal-overlay" style="z-index:10050;background:rgba(0,0,0,0.85);">
+                                      <div class="modal-content" style="max-width:440px;background:#0f172a;color:#fff;border:2px solid var(--gold);">
+                                        <div style="text-align:center;margin-bottom:16px;">
+                                          <div style="font-size:36px;">🏢</div>
+                                          <div style="font-weight:900;font-size:18px;color:var(--gold);">子会社売却入札</div>
+                                          <div style="font-size:13px;color:#94a3b8;margin-top:4px;">${c.name.replace(/\[.*?\]\s*/,'')} が ${target.name.replace(/\[.*?\]\s*/,'')} を売りに出しました</div>
+                                        </div>
+                                        <div style="background:#1e293b;border-radius:10px;padding:14px;margin-bottom:14px;">
+                                          <div class="flex-between" style="margin-bottom:6px;"><span style="color:#94a3b8;">時価総額</span><span style="font-weight:900;">¥${Math.floor(target.marketCap/10000).toLocaleString()}万</span></div>
+                                          <div class="flex-between" style="margin-bottom:6px;"><span style="color:#94a3b8;">AI最高入札</span><span style="font-weight:900;color:var(--danger);">¥${Math.floor(topBid/10000).toLocaleString()}万</span></div>
+                                          <div class="flex-between"><span style="color:#94a3b8;">あなたの手元資金</span><span style="font-weight:900;color:var(--success);">¥${Math.floor(p.cash/10000).toLocaleString()}万</span></div>
+                                        </div>
+                                        <div style="margin-bottom:14px;">
+                                          <div style="font-size:12px;color:#94a3b8;margin-bottom:6px;">入札額（万円）</div>
+                                          <input type="number" id="auction-bid-input" value="${Math.floor(topBid*1.05/10000)}" min="${Math.floor(basePrice/10000)}" style="width:100%;font-size:18px;font-weight:bold;text-align:center;border-radius:8px;border:2px solid var(--gold);background:#1e293b;color:#fff;padding:8px;">
+                                        </div>
+                                        <div style="display:flex;gap:10px;">
+                                          <button class="btn-outline btn-large" style="flex:1;border-color:#64748b;color:#94a3b8;" onclick="closeModal('auction-modal')">パス</button>
+                                          <button class="btn-primary btn-large" style="flex:2;background:var(--gold);" onclick="submitAuctionBid('${c.id}','${target.id}','${topBidder?.id||''}',${topBid})">💰 この価格で落札する</button>
+                                        </div>
+                                      </div>
+                                    </div>`);
+                                    document.getElementById('auction-modal').style.display = 'flex';
+                                    // AIは落札しなかった場合の処理を submitAuctionBid に委ねる
+                                    window._pendingAuctionSeller = c;
+                                    window._pendingAuctionTarget = target;
+                                    window._pendingAuctionTopBidder = topBidder;
+                                    window._pendingAuctionTopBid = topBid;
                                 }
                             },
                             // ⑤ 買収提案
@@ -4751,7 +5134,7 @@
                                     let tgt = targets.sort((a,b) => (b.qNet||0)-(a.qNet||0))[0];
                                     let prem = 20 + Math.floor(Math.random() * 20);
                                     let price = Math.floor(tgt.stockPrice * (1 + prem/100));
-                                    let sharesNeeded = Math.floor(tgt.shares * 0.51);
+                                    let sharesNeeded = Math.floor(window.getFloatShares ? window.getFloatShares(tgt) * 0.51 : tgt.shares * 0.51);
                                     if (!tgt.activeTOB_v2) {
                                         tgt.activeTOB_v2 = { bidder: c.id, price, targetShares: sharesNeeded, startWeek: week, deadline: week + 4, premiumPct: prem };
                                         addLog(`【TOB宣言】総会可決により ${c.name.replace(/\[.*?\]\s*/,'')} が ${tgt.name.replace(/\[.*?\]\s*/,'')} に TOB宣言！（プレミアム +${prem}%）`, 'alert', 'M&A');
@@ -7004,7 +7387,11 @@ ${ds.desc}`)) {
                 let yearHigh = hist.length > 0 ? Math.max(...hist).toLocaleString() : sel.stockPrice.toLocaleString();
                 // 主要株主
                 let topHolder = Object.keys(sel.shareholders)
-                    .map(hid => { let co = companies.find(cp => cp.id === hid); return { n: (hid === 'player' ? '自社' : co?.name.replace(/\[.*?\]\s*/, '').substring(0, 10) || hid), v: sel.shareholders[hid] }; })
+                    .map(hid => {
+                        let co = companies.find(cp => cp.id === hid);
+                        let label = hid === 'player' ? '自社' : hid === sel.id ? `🏦 金庫株 (${sel.name.replace(/\[.*?\]\s*/,'').substring(0,6)})` : co?.name.replace(/\[.*?\]\s*/, '').substring(0, 10) || hid;
+                        return { n: label, v: sel.shareholders[hid] };
+                    })
                     .sort((a, b) => b.v - a.v)[0];
                 let mainHolder = topHolder ? `${topHolder.n} (${((topHolder.v / sel.shares) * 100).toFixed(1)}%)` : '浮動株多数';
                 let o = sel.shareholders['player'] || 0;
@@ -7088,10 +7475,15 @@ ${ds.desc}`)) {
                 let holders = Object.keys(c.shareholders)
                     .filter(hid => {
                         if (hid === 'player') return true;
+                        if (hid === c.id) return (c.shareholders[hid] || 0) > 0; // 金庫株は保有あれば表示
                         let co = companies.find(cp => cp.id === hid);
-                        return co && !co.isBankrupt; // 存在しない・倒産企業は表示しない
+                        return co && !co.isBankrupt;
                     })
-                    .map(hid => { let co = companies.find(cp => cp.id === hid); return { n: (hid === 'player' ? '自社' : co?.name.replace(/\[.*?\]\s*/g, '').substring(0, 6)), v: c.shareholders[hid], color: co?.color || '#94a3b8' }; })
+                    .map(hid => {
+                        let co = companies.find(cp => cp.id === hid);
+                        let label = hid === 'player' ? '自社' : hid === c.id ? '🏦金庫株' : co?.name.replace(/\[.*?\]\s*/g, '').substring(0, 6);
+                        return { n: label, v: c.shareholders[hid], color: hid === c.id ? '#6366f1' : (co?.color || '#94a3b8') };
+                    })
                     .sort((a, b) => b.v - a.v).slice(0, 5);
                 let holderBadges = holders.map(h => `<span style="background:${h.color}22;color:${h.color};border:1px solid ${h.color}55;padding:1px 5px;border-radius:4px;font-size:9px;font-weight:900;margin-right:3px;margin-bottom:2px;display:inline-block;">${h.n} ${((h.v / c.shares) * 100).toFixed(0)}%</span>`).join('');
 
@@ -7202,9 +7594,13 @@ ${ds.desc}`)) {
                                     <button id="btn-trade-buy-mode" class="btn-primary" style="flex:1;" onclick="setTradeMode('buy')">買う</button>
                                     <button id="btn-trade-sell-mode" class="btn-outline" style="flex:1;" onclick="setTradeMode('sell')">売る</button>
                                 </div>
-                                <div style="display:flex; gap:8px; margin-bottom:20px;">
-                                    <input type="number" id="trade-amount" value="100" min="1" oninput="calcTrade()" style="font-size:18px; font-weight:bold; text-align:center;">
+                                <div style="display:flex; gap:8px; margin-bottom:8px;">
+                                    <input type="number" id="trade-amount" value="100" min="1" oninput="syncTradeSlider()" style="font-size:18px; font-weight:bold; text-align:center;">
                                     <button class="btn-dark" style="padding:0 20px;" onclick="setTradeMax()">MAX</button>
+                                </div>
+                                <div style="margin-bottom:20px;" id="trade-slider-wrap">
+                                    <div style="display:flex;justify-content:space-between;font-size:10px;color:#94a3b8;margin-bottom:3px;"><span>0%</span><span id="trade-slider-pct">0%</span><span>40%</span></div>
+                                    <input type="range" id="trade-pct-slider" min="0" max="40" step="1" value="0" oninput="syncTradeFromSlider()" style="width:100%;accent-color:var(--primary);">
                                 </div>
                                 <div class="flex-between" style="margin-bottom:20px; padding-top:15px; border-top:1px dashed var(--border);">
                                     <div id="trade-estimate-label" style="font-size:13px; color:var(--text-mut); font-weight:bold;">概算:</div><div id="trade-estimate-total" style="font-size:22px; font-weight:900;">¥0</div>
@@ -7283,7 +7679,29 @@ ${ds.desc}`)) {
             calcTrade();
         };
 
-        window.calcTrade = function () { document.getElementById('trade-estimate-total').innerText = `¥${(companies.find(x => x.id === tradingCompanyId).stockPrice * (parseInt(document.getElementById('trade-amount').value) || 0)).toLocaleString()}`; };
+        window.calcTrade = function () {
+            let c = companies.find(x => x.id === tradingCompanyId);
+            let a = parseInt(document.getElementById('trade-amount').value) || 0;
+            document.getElementById('trade-estimate-total').innerText = `¥${(c.stockPrice * a).toLocaleString()}`;
+            // スライダー表示をbuyモードのときだけ更新
+            if (tradeMode === 'buy') {
+                let pct = c.shares > 0 ? Math.min(40, (a / c.shares * 100)) : 0;
+                let sl = document.getElementById('trade-pct-slider');
+                let lbl = document.getElementById('trade-slider-pct');
+                if (sl) sl.value = pct.toFixed(1);
+                if (lbl) lbl.textContent = pct.toFixed(1) + '%';
+            }
+        };
+        window.syncTradeSlider = function () { calcTrade(); };
+        window.syncTradeFromSlider = function () {
+            let c = companies.find(x => x.id === tradingCompanyId);
+            let pct = parseFloat(document.getElementById('trade-pct-slider').value) || 0;
+            let shares = Math.floor(c.shares * pct / 100);
+            document.getElementById('trade-amount').value = shares;
+            let lbl = document.getElementById('trade-slider-pct');
+            if (lbl) lbl.textContent = pct.toFixed(1) + '%';
+            calcTrade();
+        };
 
         window.setTradeMax = function () {
             let c = companies.find(x => x.id === tradingCompanyId), p = companies[0];
@@ -7292,6 +7710,36 @@ ${ds.desc}`)) {
                 document.getElementById('trade-amount').value = Math.min(avail, Math.floor(p.cash / c.stockPrice));
             } else { document.getElementById('trade-amount').value = c.shareholders['player'] || 0; }
             calcTrade();
+        };
+
+        window.submitAuctionBid = function(sellerId, targetId, topBidderId, topBid) {
+            let bidVal = parseInt(document.getElementById('auction-bid-input').value) * 10000;
+            let seller = companies.find(x => x.id === sellerId);
+            let target = companies.find(x => x.id === targetId);
+            let p = companies[0];
+            closeModal('auction-modal');
+            if (!seller || !target) return;
+            if (bidVal > topBid && p.cash >= bidVal) {
+                // プレイヤー落札
+                p.cash -= bidVal; seller.cash += bidVal;
+                target.parent = 'player';
+                let cleanName = target.name.replace(/\[.*?\]\s*/g,'');
+                target.name = `👑 [自社傘下] ${cleanName}`;
+                target.shareholders['player'] = (target.shareholders['player'] || 0) + Math.floor(target.shares * 0.51);
+                addLog(`【入札落札】${cleanName} を ¥${Math.floor(bidVal/10000).toLocaleString()}万 で落札しました！`, 'success', 'M&A');
+            } else if (bidVal <= topBid && topBidderId) {
+                // AIが落札
+                let topBidder = companies.find(x => x.id === topBidderId);
+                if (topBidder) {
+                    topBidder.cash -= topBid; seller.cash += topBid;
+                    target.parent = topBidder.id;
+                    target.name = `[${topBidder.name.replace(/\[.*?\]\s*/,'').slice(0,4)}傘下] ${target.name.replace(/\[.*?\]\s*/,'')}`;
+                    addLog(`【入札】${target.name.replace(/\[.*?\]\s*/,'')} は ${topBidder.name.replace(/\[.*?\]\s*/,'')} が ¥${Math.floor(topBid/10000).toLocaleString()}万 で落札しました。`, 'news', 'M&A');
+                }
+            } else if (!topBidderId) {
+                addLog(`【売却不成立】${target.name.replace(/\[.*?\]\s*/,'')} の買い手が見つかりませんでした。`, 'warning', 'M&A');
+            }
+            updateDashboard();
         };
 
         window.executeTrade = function () {
@@ -10622,7 +11070,7 @@ ${ds.desc}`)) {
 
             if (c.activeTOB_v2) {
                 let currentBidderShares = c.shareholders[c.activeTOB_v2.bidder] || 0;
-                c.activeTOB_v2.targetShares = Math.max(0, Math.floor(c.shares * 0.51) + 1 - currentBidderShares);
+                c.activeTOB_v2.targetShares = Math.max(0, Math.floor((window.getFloatShares ? window.getFloatShares(c) : c.shares) * 0.51) + 1 - currentBidderShares);
             }
         };
         // ==========================================
