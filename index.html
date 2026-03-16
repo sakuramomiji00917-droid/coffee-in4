@@ -2702,6 +2702,14 @@
                         c.name = c.name.replace(/👑\s*/, '').replace(/\[.*?\]\s*/, '');
                         addLog(`【傘下離脱】持株比率が50%以下に低下したため、${c.name} は自社グループから外れました。`, 'warning', 'M&A');
                     }
+                } else if (c.parent && c.parent !== 'player') {
+                    // AI傘下も同様に50%未満なら解除
+                    let _parentHeld = c.shareholders[c.parent] || 0;
+                    if (_parentHeld <= c.shares * 0.5) {
+                        let _oldParent = c.parent;
+                        c.parent = null;
+                        c.name = c.name.replace(/\[.*?\]\s*/, '');
+                    }
                 }
 
                 if (!c.bankDebts) c.bankDebts = {};
@@ -5082,11 +5090,19 @@
                             if (bidderCo && bidderCo.cash >= finalCost) {
                                 bidderCo.cash -= finalCost;
                                 c.shareholders[tob.bidder] = (c.shareholders[tob.bidder] || 0) + tob.targetShares;
-                                c.parent = bidderCo.id;
+                                // 50%超保有の場合のみ傘下化
+                                let _totalHeld = c.shareholders[tob.bidder] || 0;
+                                let _floatShares = window.getFloatShares ? window.getFloatShares(c) : c.shares;
+                                let _holdPct = _floatShares > 0 ? _totalHeld / c.shares : 0;
                                 let tgtName = c.name.replace(/\[.*?\]\s*/g, '');
                                 let bdrName = bidderCo.name.replace(/\[.*?\]\s*/g, '');
-                                c.name = `[${bdrName}傘下] ${tgtName}`;
-                                addLog(`【買収完了】${bdrName} が ${tgtName} を子会社化しました。`, 'alert', 'M&A');
+                                if (_holdPct > 0.50) {
+                                    c.parent = bidderCo.id;
+                                    c.name = `[${bdrName}傘下] ${tgtName}`;
+                                    addLog(`【買収完了】${bdrName} が ${tgtName} を子会社化しました。（${Math.floor(_holdPct*100)}%取得）`, 'alert', 'M&A');
+                                } else {
+                                    addLog(`【大株主】${bdrName} が ${tgtName} の株式 ${Math.floor(_holdPct*100)}% を取得。過半数未達のため傘下化なし。`, 'normal', 'M&A');
+                                }
                             } else if (bidderCo) {
                                 // AI資金不足 → 撤退ニュース
                                 let tgtName = c.name.replace(/\[.*?\]\s*/, '');
