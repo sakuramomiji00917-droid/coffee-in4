@@ -5126,13 +5126,17 @@
                                 let _acquired = 0;
                                 let _totalPaid = 0;
 
-                                // 1. market浮動株は全量自動応募
+                                // 1. market浮動株は全量自動応募 & 即時決済
                                 let _mktFloat = c.shareholders['market'] || 0;
                                 let _fromMkt = Math.min(tob.targetShares, _mktFloat);
-                                if (_fromMkt > 0) {
-                                    _acquired += _fromMkt;
-                                    _totalPaid += _fromMkt * tob.price;
+                                if (_fromMkt > 0 && bidderCo.cash >= _fromMkt * tob.price) {
+                                    let _mktCost = _fromMkt * tob.price;
+                                    bidderCo.cash -= _mktCost;
                                     c.shareholders['market'] = Math.max(0, _mktFloat - _fromMkt);
+                                    c.shareholders[tob.bidder] = (c.shareholders[tob.bidder] || 0) + _fromMkt;
+                                    _acquired += _fromMkt;
+                                    _totalPaid += _mktCost;
+                                    addLog(`【TOB市場買付】${bidderCo.name.replace(/\[.*?\]\s*/,'')} が ${c.name.replace(/\[.*?\]\s*/,'')} の浮動株 ${_fromMkt.toLocaleString()}株を市場から取得。`, 'normal', 'M&A');
                                 }
 
                                 // 2. AI株主：性格タイプに応じて応募確率
@@ -5149,12 +5153,15 @@
                                         let prob = { 'Greedy': 0.80, 'Aggressive': 0.60, 'Balanced': 0.40, 'Conservative': 0.20, 'Growth': 0.30 }[shCo.personality] || 0.40;
                                         if (Math.random() < prob) {
                                             let sellAmt = Math.min(held, _remaining - _acquired);
-                                            if (sellAmt > 0) {
+                                            let aiCost = sellAmt * tob.price;
+                                            if (sellAmt > 0 && bidderCo.cash >= aiCost) {
                                                 c.shareholders[shId] = held - sellAmt;
-                                                shCo.cash += sellAmt * tob.price;
-                                                shCo.qNet = (shCo.qNet || 0) + sellAmt * tob.price;
+                                                c.shareholders[tob.bidder] = (c.shareholders[tob.bidder] || 0) + sellAmt;
+                                                bidderCo.cash -= aiCost;
+                                                shCo.cash += aiCost;
+                                                shCo.qNet = (shCo.qNet || 0) + aiCost;
                                                 _acquired += sellAmt;
-                                                _totalPaid += sellAmt * tob.price;
+                                                _totalPaid += aiCost;
                                             }
                                         }
                                     });
@@ -5202,11 +5209,9 @@
                                     });
                                 }
 
-                                // 支払い実行
-                                if (_acquired > 0 && bidderCo.cash >= _totalPaid) {
-                                    bidderCo.cash -= _totalPaid;
-                                    c.shareholders[tob.bidder] = (c.shareholders[tob.bidder] || 0) + _acquired;
-                                }
+                                // 支払い実行（market分は上で処理済み。ここではAI株主分のみ）
+                                // _totalPaidはmarket分を含むが、market分はすでに決済済みなので
+                                // AI株主への支払いは個別に行われている（上のforEachで処理）
 
                                 // 傘下化判定（プレイヤー打診なしの場合）
                                 if (_playerHeld <= 0 || _acquired >= tob.targetShares) {
@@ -11442,7 +11447,7 @@ ${ds.desc}`)) {
             let modalsArea = document.getElementById('modals-area');
             let modalHtml = `
                 <div id="voting-modal" class="modal-overlay" style="display:flex; z-index:2000; background:rgba(0,0,0,0.85); backdrop-filter:blur(15px);">
-                    <div class="modal-content" style="max-width:600px; padding:0; overflow:hidden; border:1px solid #334155; box-shadow:0 25px 50px -12px rgba(0,0,0,0.5); max-height:90vh; display:flex; flex-direction:column;">
+                    <div class="modal-content" style="max-width:600px; padding:0; overflow:hidden; border:1px solid #334155; box-shadow:0 25px 50px -12px rgba(0,0,0,0.5); max-height:90vh; display:flex; flex-direction:column; overflow-y:auto;">
                         <div style="background:linear-gradient(135deg, #1e293b, #0f172a); color:#fff; padding:25px; text-align:center; border-bottom:4px solid ${eventData.type === 'tob_defense' ? 'var(--danger)' : 'var(--primary)'};">
                             <div style="font-size:12px; color:#94a3b8; font-weight:900; letter-spacing:3px; margin-bottom:5px;">🏛️ SHAREHOLDER MEETING</div>
                             <h2 style="margin:0; font-size:24px; font-weight:900; color:#fff;">【${targetCo.name.replace(/\[.*?\]\s*/, '')}】 <span style="font-size:0.75em; color:#94a3b8;">定時株主総会</span></h2>
@@ -11547,8 +11552,12 @@ ${ds.desc}`)) {
             if (p.cash < totalCost) return alert(`予想買収総額（約 ¥${Math.floor(totalCost / 10000).toLocaleString()}万）に対して手元資金が不足しています。`);
 
             // いきなり買収せず、取締役会（承認プロセス）を開く！
-            closeModal('trade-modal');
-            openBoardApprovalModal(c.id, premiumPrice, sharesToBuy, totalCost);
+            try {
+                openBoardApprovalModal(c.id, premiumPrice, sharesToBuy, totalCost);
+                closeModal('trade-modal'); // 成功後に閉じる
+            } catch(e) {
+                alert('TOBモーダルエラー: ' + e.message);
+            }
         };
 
         window.openBoardApprovalModal = function (targetId, price, sharesToBuy, totalCost) {
@@ -11590,14 +11599,8 @@ ${ds.desc}`)) {
                 let name = isPlayer ? '👑 CEO (あなた)' : ai.name.replace(/\[.*?\]\s*/, '');
                 let mark = isApprove ? '<span style="color:var(--success); font-weight:bold;">✅ 賛成</span>' : '<span style="color:var(--danger); font-weight:bold;">❌ 反対</span>';
 
-                resultsHtml += `
-            <div class="flex-between" style="padding:12px; border-bottom:1px solid rgba(255,255,255,0.1);">
-                <div>
-                    <div style="font-weight:bold;">${name} <span style="font-size:11px; color:#94a3b8;">(${((v.shares / p.shares) * 100).toFixed(1)}%)</span></div>
-                    <div style="font-size:11px; color:#64748b; margin-top:4px;">${isPlayer ? '' : '理由: ' + reason}</div>
-                </div>
-                <div style="font-size:16px;">${mark}</div>
-            </div>`;
+                let safeReason = (reason || '').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+                resultsHtml += `<div class="flex-between" style="padding:12px; border-bottom:1px solid rgba(255,255,255,0.1);"><div><div style="font-weight:bold;">${name} <span style="font-size:11px; color:#94a3b8;">(${((v.shares / p.shares) * 100).toFixed(1)}%)</span></div><div style="font-size:11px; color:#64748b; margin-top:4px;">${isPlayer ? '' : '理由: ' + safeReason}</div></div><div style="font-size:16px;">${mark}</div></div>`;
             });
 
             let isPassed = approveVotes > (totalVotes / 2);
