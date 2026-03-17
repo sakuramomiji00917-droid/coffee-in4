@@ -11579,6 +11579,7 @@ ${ds.desc}`)) {
                 let isApprove = false; let reason = "";
 
                 if (isPlayer) { isApprove = true; reason = "CEO提案"; }
+                else if (!ai) { return; } // market等の非企業IDはスキップ
                 else {
                     let baseProb = (ai.loyalty || 50) / 100;
                     if (ai.personality === 'Conservative') { baseProb -= 0.3; reason = "「リスクが大きすぎる」"; }
