@@ -5053,8 +5053,11 @@
                     if (elapsed >= 4) {
                         let bidderCo = companies.find(x => x.id === tob.bidder); let finalCost = tob.price * tob.targetShares;
                         if (tob.bidder === 'player') {
-                            // プレイヤー：確認モーダルを出す
-                            if (p.cash >= finalCost) {
+                            // プレイヤー：確認モーダルを出す（一度だけ）
+                            if (tob._confirmShown) { /* 既に表示済み */ }
+                            else if (p.cash >= finalCost) {
+                                tob._confirmShown = true;
+                                delete c.activeTOB_v2; // 先に削除してループ防止
                                 let tgtNameConfirm = c.name.replace(/\[.*?\]\s*/, '');
                                 window._pendingTOB = { targetId: c.id, finalCost, tgtName: tgtNameConfirm };
                                 setTimeout(() => {
@@ -11678,6 +11681,7 @@ ${ds.desc}`)) {
                 }
 
                 // 【Step2】メインバンクへ借入（不足額の最大60%）
+                let banks = companies.filter(b => b.sector === 'bank' && !b.isBankrupt && b.cash > 0);
                 if (shortfall > 0 && banks.length > 0) {
                     let mainBank = banks.find(b => b.id === p.mainBankId) || banks[0];
                     let borrowMax = Math.min(shortfall * 0.8, mainBank.cash * 0.1, p.marketCap * 0.3);
