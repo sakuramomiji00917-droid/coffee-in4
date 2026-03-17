@@ -4318,7 +4318,7 @@
                                 c.stockPrice = Math.max(10, Math.floor(c.stockPrice * 0.85));
                                 c.marketCap = c.stockPrice * c.shares;
                                 let bidName = companies.find(x => x.id === bidderId)?.name.replace(/\[.*?\]\s*/, '') || bidderId;
-                                let newBidPct = ((c.shareholders[bidderId] || 0) / c.shares * 100).toFixed(1);
+                                let newBidPct = (window.getFloatPct(c, bidderId) * 100).toFixed(1);
                                 addLog(`【ポイズンピル発動】${c.name.replace(/\[.*?\]\s*/, '')} がTOBに対抗し新株20%発行。${bidName} の持株比率が ${(bidderPct * 100).toFixed(1)}% → ${newBidPct}% に希薄化。買収コストが急増。`, 'alert', 'M&A');
                                 // TOBの必要取得株数も再計算
                                 let needed = Math.floor(window.getFloatShares ? window.getFloatShares(c) : c.shares * 0.99, 1) * 0.51 + 1; needed = Math.floor(needed);
@@ -8210,7 +8210,12 @@ ${ds.desc}`)) {
                         return { n: label, v: c.shareholders[hid], color: hid === c.id ? '#6366f1' : (co?.color || '#94a3b8') };
                     })
                     .sort((a, b) => b.v - a.v).slice(0, 5);
-                let holderBadges = holders.map(h => `<span style="background:${h.color}22;color:${h.color};border:1px solid ${h.color}55;padding:1px 5px;border-radius:4px;font-size:9px;font-weight:900;margin-right:3px;margin-bottom:2px;display:inline-block;">${h.n} ${((h.v / c.shares) * 100).toFixed(0)}%</span>`).join('');
+                let _cFloat = window.getFloatShares(c);
+                let holderBadges = holders.map(h => {
+                    // 金庫株は総発行済ベースで表示、それ以外は浮動株ベース（議決権ベース）
+                    let pct = h.n === '🏦金庫株' ? ((h.v / c.shares) * 100).toFixed(0) : (_cFloat > 0 ? ((h.v / _cFloat) * 100).toFixed(0) : '0');
+                    return `<span style="background:${h.color}22;color:${h.color};border:1px solid ${h.color}55;padding:1px 5px;border-radius:4px;font-size:9px;font-weight:900;margin-right:3px;margin-bottom:2px;display:inline-block;">${h.n} ${pct}%</span>`;
+                }).join('');
 
                 return `<tr onclick="selectMarketCompany('${c.id}')" style="border-bottom:1px solid var(--border);cursor:pointer;background:${isSel ? '#eff6ff' : 'transparent'};transition:0.15s;">
                     <td style="padding:10px 12px;">
@@ -8410,7 +8415,8 @@ ${ds.desc}`)) {
             document.getElementById('trade-estimate-total').innerText = `¥${(c.stockPrice * a).toLocaleString()}`;
             // スライダー表示をbuyモードのときだけ更新
             if (tradeMode === 'buy') {
-                let pct = c.shares > 0 ? Math.min(40, (a / c.shares * 100)) : 0;
+                let _trFloat = window.getFloatShares(c);
+                let pct = _trFloat > 0 ? Math.min(40, (a / _trFloat * 100)) : 0;
                 let sl = document.getElementById('trade-pct-slider');
                 let lbl = document.getElementById('trade-slider-pct');
                 if (sl) sl.value = pct.toFixed(1);
@@ -9406,9 +9412,9 @@ ${ds.desc}`)) {
                 });
                 let allProps = [...props, ..._extraProps];
                 let propHtml = allProps.length > 0 ? allProps.map(p => `<div class="flex-between" style="border-bottom:1px dashed var(--border); padding:10px 0; font-size:13px;"><span>🏢 ${(p.name||'').substring(0, 18)}</span><span style="font-weight:bold; color:var(--success);">¥${Math.floor((p.currentValue||0) / 10000).toLocaleString()}万</span></div>`).join('') : '<div style="color:var(--text-mut); text-align:center; padding:15px;">所有物件なし</div>';
-                let subs = companies.filter(c => c.id !== cid && (c.parent === cid || (c.shareholders[cid] / c.shares) > 0.5));
+                let subs = companies.filter(c => c.id !== cid && (c.parent === cid || (window.getFloatPct(c, cid) > 0.5)));
                 let subHtml = subs.length > 0 ? subs.map(c => {
-                    let domRate = (c.shares > 0 && c.shareholders && c.shareholders[cid]) ? ((c.shareholders[cid] / c.shares) * 100).toFixed(1) : '--';
+                    let domRate = (window.getFloatShares(c) > 0 && c.shareholders && c.shareholders[cid]) ? (window.getFloatPct(c, cid) * 100).toFixed(1) : '--';
                     return `<div class="flex-between" style="border-bottom:1px dashed var(--border); padding:10px 0; font-size:13px;"><span>🤝 ${c.name.replace(/\[.*?\]\s*/, '').substring(0, 18)}</span><span style="color:#8b5cf6;font-size:12px;font-weight:bold;">${domRate}% 支配</span></div>`;
                 }).join('') : '<div style="color:var(--text-mut);text-align:center;padding:15px;">子会社なし</div>';
                 let portfolioHtml = ''; let portCount = 0;
@@ -9885,7 +9891,7 @@ ${ds.desc}`)) {
                             let gainPct = (c.playerTotalCost || 0) > 0 ? (gain / (c.playerTotalCost || 1)) * 100 : 0;
                             let gc = gain >= 0 ? '#4ade80' : '#f87171';
                             let gs = gain >= 0 ? '+' : '';
-                            let pct = ((o / c.shares) * 100).toFixed(1);
+                            let pct = (window.getFloatShares(c) > 0 ? (o / window.getFloatShares(c)) * 100 : 0).toFixed(1);
                             let badge = window.getCountryBadge ? window.getCountryBadge(c.country) : '';
                             let hist = (stockHistory.datasets?.[c.id]) || [c.stockPrice];
                             let prevP = hist.length > 1 ? hist[hist.length - 2] : c.stockPrice;
@@ -12024,13 +12030,13 @@ ${ds.desc}`)) {
             let dilutionRate = percent / 100;
             let newShares = Math.floor(c.shares * dilutionRate);
             let raisedCash = newShares * c.stockPrice;
-            let oldPct = ((c.shareholders['player'] || 0) / c.shares) * 100;
+            let oldPct = (window.getFloatPct(c, 'player')) * 100;
 
             c.shares += newShares;
             c.cash += raisedCash;
             c.lastDilutionWeek = week;
 
-            let newPct = ((c.shareholders['player'] || 0) / c.shares) * 100;
+            let newPct = (window.getFloatPct(c, 'player')) * 100;
 
             addLog(`【公募増資】${c.name.replace(/\[.*?\]\s*/, '')}が新株を ${newShares.toLocaleString()}株 発行！市場から ¥${Math.floor(raisedCash / 10000).toLocaleString()}万 を調達しました。`, 'alert', '財務');
             if (c.shareholders['player'] > 0) {
