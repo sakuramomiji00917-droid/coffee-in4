@@ -8031,6 +8031,23 @@ ${ds.desc}`)) {
                 p.shares += newShares;
                 p.shareholders['market'] = (p.shareholders['market'] || 0) + newShares;
                 p.cash += proceeds;
+                // IPO直後：AI企業数社が初期株主として参入
+                let _ipoInvestors = companies.filter(c => c.id !== 'player' && !c.isBankrupt && c.cash > p.stockPrice * 100);
+                _ipoInvestors.sort(() => Math.random() - 0.5);
+                let _ipoCount = Math.min(4, _ipoInvestors.length);
+                for (let i = 0; i < _ipoCount; i++) {
+                    let inv = _ipoInvestors[i];
+                    let pct = 0.02 + Math.random() * 0.04; // 2〜6%取得
+                    let buyShares = Math.min(Math.floor(p.shares * pct), p.shareholders['market'] || 0);
+                    if (buyShares <= 0) continue;
+                    let cost = buyShares * p.stockPrice;
+                    if (inv.cash < cost) continue;
+                    inv.cash -= cost;
+                    p.cash += cost;
+                    p.shareholders[inv.id] = (p.shareholders[inv.id] || 0) + buyShares;
+                    p.shareholders['market'] = Math.max(0, (p.shareholders['market'] || 0) - buyShares);
+                    addLog(`【IPO初期株主】${inv.name.replace(/\[.*?\]\s*/g,'')} が ${p.name} の株を ${buyShares.toLocaleString()}株（${(pct*100).toFixed(1)}%）取得しました。`, 'normal', 'M&A');
+                }
                 // 株価履歴を初期化
                 stockHistory.datasets['player'] = Array(stockHistory.labels.length).fill(p.stockPrice);
                 addLog(`【🎉 上場完了！】${p.name} が正式上場しました！新規株式 ${newShares.toLocaleString()}株を ¥${issuePrice.toLocaleString()} で放出。調達額: ¥${Math.floor(proceeds/10000).toLocaleString()}万`, 'success', '自社');
@@ -11478,7 +11495,8 @@ ${ds.desc}`)) {
                     document.getElementById('text-yes').innerText = finalYes.toLocaleString();
                     document.getElementById('text-no').innerText = finalNo.toLocaleString();
 
-                    let isPassed = yesPct > 50;
+                    // tob_offer はプレイヤー個人の売却判断なので多数決を使わず直接反映
+                    let isPassed = eventData.type === 'tob_offer' ? playerIsYes : yesPct > 50;
                     let resultTextEl = document.getElementById('voting-final-text');
                     resultTextEl.innerText = isPassed ? "⭕ 議案は【可決】されました" : "❌ 議案は【否決】されました";
                     resultTextEl.style.color = isPassed ? "var(--success)" : "var(--danger)";
