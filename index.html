@@ -9470,11 +9470,10 @@ ${ds.desc}`)) {
 
                 // 実際の総資産 = 現金 + 普通預金 + 定期預金 + 株式保有評価 + 不動産
                 let _stockVal0 = 0;
-                if (target.shareholders) {
-                    for (let sid in target.shareholders) {
-                        let held = companies.find(x => x.id === sid);
-                        if (held && held.stockPrice > 0) _stockVal0 += held.stockPrice * (target.shareholders[sid] || 0);
-                    }
+                // target が「保有している他社株」の評価額（逆方向：各社のshareholders[target.id]を見る）
+                for (let co of companies) {
+                    let sharesHeld = (co.shareholders && co.shareholders[target.id]) || 0;
+                    if (sharesHeld > 0 && co.stockPrice > 0) _stockVal0 += co.stockPrice * sharesHeld;
                 }
                 let assets = Math.max(
                     target.cash + _depTotal0 + _tdTotal0 + _stockVal0,
