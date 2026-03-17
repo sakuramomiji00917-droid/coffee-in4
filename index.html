@@ -5389,13 +5389,47 @@
                                 action: () => {
                                     let buybackShares = Math.floor((c.shares||10000) * 0.10);
                                     let cost = buybackShares * (c.stockPrice||100);
+                                    // 【段階1】資金不足なら銀行から緊急借入
+                                    if (c.cash < cost && c.sector !== 'bank') {
+                                        let availBanks = companies.filter(b => b.sector === 'bank' && !b.isBankrupt && b.cash > 0);
+                                        if (availBanks.length > 0) {
+                                            let lender = availBanks.reduce((a, b) => (b.loanRate||0.005) < (a.loanRate||0.005) ? b : a);
+                                            let creditLimit = Math.max(1, (c.stores?.length||1)) * 50000000 * (c.isPublic ? 2 : 1);
+                                            let existing = (c.bankDebts?.[lender.id] || 0);
+                                            let canBorrow = Math.max(0, creditLimit - existing);
+                                            let borrowAmt = Math.min(canBorrow, cost - c.cash);
+                                            if (borrowAmt > 0) {
+                                                c.cash += borrowAmt;
+                                                lender.cash -= borrowAmt;
+                                                if (!c.bankDebts) c.bankDebts = {};
+                                                c.bankDebts[lender.id] = existing + borrowAmt;
+                                                addLog(`【自社株買い資金調達】${c.name.replace(/\[.*?\]\s*/,'')} が銀行から ¥${Math.floor(borrowAmt/10000).toLocaleString()}万 を緊急借入しました。`, 'normal', 'M&A');
+                                            }
+                                        }
+                                    }
+                                    // 【段階2】まだ足りなければ保有株を売却して現金化
+                                    if (c.cash < cost) {
+                                        let portfolio = companies.filter(t => t.id !== c.id && (t.shareholders[c.id]||0) > 0 && t.isPublic);
+                                        portfolio.sort((a, b) => (b.stockPrice*(b.shareholders[c.id]||0)) - (a.stockPrice*(a.shareholders[c.id]||0)));
+                                        for (let sell of portfolio) {
+                                            if (c.cash >= cost) break;
+                                            let sellShares = Math.floor((sell.shareholders[c.id]||0) * 0.5);
+                                            if (sellShares > 0) {
+                                                let proceeds = sell.stockPrice * sellShares;
+                                                c.cash += proceeds;
+                                                sell.shareholders[c.id] = (sell.shareholders[c.id]||0) - sellShares;
+                                                addLog(`【自社株買い資金調達】${c.name.replace(/\[.*?\]\s*/,'')} が ${sell.name.replace(/\[.*?\]\s*/,'')} 株を売却し ¥${Math.floor(proceeds/10000).toLocaleString()}万 を調達しました。`, 'normal', 'M&A');
+                                            }
+                                        }
+                                    }
+                                    // 【段階3】実行 or 失敗ログ
                                     if (c.cash >= cost) {
                                         c.cash -= cost;
-                                        // 金庫株方式: 発行済株数はそのまま、自己保有として記録
                                         c.shareholders[c.id] = (c.shareholders[c.id] || 0) + buybackShares;
-                                        // 浮動株から減らす（市場の需給改善）
                                         c.stockPrice = Math.floor((c.stockPrice||100) * 1.08);
                                         addLog(`【自社株買い】${c.name.replace(/\[.*?\]\s*/,'')} が ${buybackShares.toLocaleString()}株を金庫株として取得。株価↑ ¥${c.stockPrice.toLocaleString()}（自己保有${((c.shareholders[c.id]/c.shares)*100).toFixed(1)}%）`, 'success', 'M&A');
+                                    } else {
+                                        addLog(`【自社株買い不可】${c.name.replace(/\[.*?\]\s*/,'')} は資金・借入枠が不足しており、自社株買いを実行できませんでした。`, 'warning', 'M&A');
                                     }
                                 }
                             },
@@ -5529,7 +5563,9 @@
                         let topAI = allShares.length > 0 ? allShares.reduce((a, b) => a[1] > b[1] ? a : b) : null;
                         let topAIShares = topAI ? topAI[1] : 0;
                         let playerIsTop = (c.shareholders['player'] || 0) > topAIShares;
-                        let aiIsTop = !playerIsTop && topAI && topAIShares > (c.shareholders['player'] || 0);
+                        // AIが過半数（50%超）を持つ場合のみ単独支配とみなす。それ以外はプレイヤーも総会に参加できる
+                        let aiHasAbsoluteMajority = topAI && topAIShares > c.shares * 0.50;
+                        let aiIsTop = !playerIsTop && aiHasAbsoluteMajority;
 
                         if (aiIsTop) {
                             // AIが筆頭株主 → 自分に有利な議案を自動選択して即実行（総会モーダルなし）
