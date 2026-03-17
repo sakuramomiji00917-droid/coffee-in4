@@ -4263,8 +4263,7 @@
                                 }
                             }
                             else if (currentShares < Math.floor(target.shares * 0.49) && Math.random() < 0.15) {
-                                let totalOwned = Object.values(target.shareholders).reduce((sum, val) => sum + val, 0);
-                                let marketFloat = Math.max(0, target.shares - totalOwned);
+                                let marketFloat = window.getMarketShares(target);
                                 let maxBuyShares = Math.floor(target.shares * (Math.random() * 0.1 + 0.05)), limit = Math.floor(target.shares * 0.49) - currentShares, sharesToBuy = Math.min(Math.floor((c.cash * 0.3) / target.stockPrice), maxBuyShares, limit, marketFloat);
                                 if (sharesToBuy > 100) {
                                     c.cash -= sharesToBuy * target.stockPrice;
@@ -4276,8 +4275,7 @@
                             }
                         } else {
                             if (currentShares < Math.floor(target.shares * 0.30) && Math.random() < 0.25) {
-                                let totalOwned = Object.values(target.shareholders).reduce((sum, val) => sum + val, 0);
-                                let marketFloat = Math.max(0, target.shares - totalOwned);
+                                let marketFloat = window.getMarketShares(target);
                                 let maxBuyShares = Math.floor(target.shares * (Math.random() * 0.05 + 0.02)), sharesToBuy = Math.min(Math.floor((c.cash * 0.15) / target.stockPrice), maxBuyShares, marketFloat);
                                 if (sharesToBuy > 100) {
                                     c.cash -= sharesToBuy * target.stockPrice;
@@ -8110,15 +8108,17 @@ ${ds.desc}`)) {
                     ? '¥' + Math.floor((sel.lastQProfit * (sel.dividendRate / 100)) / sel.shares).toLocaleString()
                     : '-';
                 let yearHigh = hist.length > 0 ? Math.max(...hist).toLocaleString() : sel.stockPrice.toLocaleString();
-                // 主要株主
+                // 主要株主（marketを除く実株主のみ）
+                let _selFloat = window.getFloatShares(sel);
                 let topHolder = Object.keys(sel.shareholders)
+                    .filter(hid => hid !== 'market' && (sel.shareholders[hid] || 0) > 0)
                     .map(hid => {
                         let co = companies.find(cp => cp.id === hid);
-                        let label = hid === 'player' ? '自社' : hid === sel.id ? `🏦 金庫株 (${sel.name.replace(/\[.*?\]\s*/,'').substring(0,6)})` : co?.name.replace(/\[.*?\]\s*/, '').substring(0, 10) || hid;
-                        return { n: label, v: sel.shareholders[hid] };
+                        let label = hid === 'player' ? '自社' : hid === sel.id ? `🏦 金庫株` : co?.name.replace(/\[.*?\]\s*/, '').substring(0, 10) || hid;
+                        return { n: label, v: sel.shareholders[hid], isTreasury: hid === sel.id };
                     })
                     .sort((a, b) => b.v - a.v)[0];
-                let mainHolder = topHolder ? `${topHolder.n} (${((topHolder.v / sel.shares) * 100).toFixed(1)}%)` : '浮動株多数';
+                let mainHolder = topHolder ? `${topHolder.n} (${topHolder.isTreasury ? ((topHolder.v / sel.shares) * 100).toFixed(1) : (_selFloat > 0 ? ((topHolder.v / _selFloat) * 100).toFixed(1) : '0')}%)` : '浮動株多数';
                 let o = sel.shareholders['player'] || 0;
                 let pVal = o > 0 ? sel.stockPrice * o - (sel.playerTotalCost || 0) : 0;
                 let badge = window.getCountryBadge ? window.getCountryBadge(sel.country) : sel.country;
@@ -8374,7 +8374,7 @@ ${ds.desc}`)) {
             document.getElementById('trade-owned-shares').innerText = `${o.toLocaleString()}`;
             document.getElementById('trade-avg-cost').innerText = `(¥${o > 0 ? Math.floor(c.playerTotalCost / o).toLocaleString() : 0})`;
             document.getElementById('trade-current-cash').innerText = `¥${p.cash.toLocaleString()}`;
-            document.getElementById('trade-available-shares').innerText = `市場出回: ${Math.max(0, c.shares - Object.values(c.shareholders).reduce((x, y) => x + y, 0)).toLocaleString()} 株`;
+            document.getElementById('trade-available-shares').innerText = `市場出回: ${(window.getMarketShares(c)).toLocaleString()} 株`;
 
             // 🌟 借金残高の表示
             document.getElementById('trade-loan-debt').innerText = debt.toLocaleString();
@@ -8437,7 +8437,7 @@ ${ds.desc}`)) {
         window.setTradeMax = function () {
             let c = companies.find(x => x.id === tradingCompanyId), p = companies[0];
             if (tradeMode === 'buy') {
-                let avail = Math.max(0, c.shares - Object.values(c.shareholders).reduce((x, y) => x + y, 0));
+                let avail = window.getMarketShares(c);
                 document.getElementById('trade-amount').value = Math.min(avail, Math.floor(p.cash / c.stockPrice));
             } else { document.getElementById('trade-amount').value = c.shareholders['player'] || 0; }
             calcTrade();
@@ -8478,7 +8478,7 @@ ${ds.desc}`)) {
             if (isNaN(a) || a <= 0) return;
             if (tradeMode === 'buy') {
                 if (p.cash < cost) return alert("資金不足です！");
-                if (Object.values(c.shareholders).reduce((x, y) => x + y, 0) + a > c.shares) return alert("市場に出回っている株が不足しています。");
+                if (a > window.getMarketShares(c)) return alert("市場に出回っている株が不足しています。");
 
                 let currentOwned = c.shareholders['player'] || 0;
                 let newRatio = (currentOwned + a) / c.shares;
