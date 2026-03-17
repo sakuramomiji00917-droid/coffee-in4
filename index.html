@@ -1760,20 +1760,21 @@
 
             // 🚨 敵対的買収バナー更新
             if (p.isPublic) {
-                let otherKeys = Object.keys(p.shareholders).filter(k => k !== 'player');
-                let stolenShares = otherKeys.reduce((s, k) => s + (p.shareholders[k] || 0), 0);
-                let stolenPct = p.shares > 0 ? stolenShares / p.shares : 0;
+                let _enemyKeys = Object.keys(p.shareholders).filter(k => k !== 'player' && k !== 'market' && k !== p.id && (p.shareholders[k] || 0) > 0);
+                let _enemyShares = _enemyKeys.reduce((s, k) => s + (p.shareholders[k] || 0), 0);
+                let _flSh = window.getFloatShares(p);
+                let _enemyPct = _flSh > 0 ? _enemyShares / _flSh : 0;
                 let banner = document.getElementById('hostile-takeover-banner');
                 let bannerText = document.getElementById('hostile-banner-text');
                 if (banner) {
-                    if (stolenPct >= 0.35) {
+                    if (_enemyPct >= 0.35) {
                         banner.style.display = 'block';
                         banner.style.background = 'linear-gradient(90deg,#7f1d1d,#dc2626)';
-                        if (bannerText) bannerText.textContent = `🔴 最終警告！自社株${(stolenPct * 100).toFixed(1)}%が敵対勢力に！即座に自社株買いで防衛を！`;
-                    } else if (stolenPct >= 0.20) {
+                        if (bannerText) bannerText.textContent = `🔴 最終警告！自社株${(_enemyPct * 100).toFixed(1)}%が敵対勢力に！即座に自社株買いで防衛を！`;
+                    } else if (_enemyPct >= 0.20) {
                         banner.style.display = 'block';
                         banner.style.background = 'linear-gradient(90deg,#b45309,#d97706)';
-                        if (bannerText) bannerText.textContent = `⚠️ 自社株${(stolenPct * 100).toFixed(1)}%が買い集められています。防衛を検討してください`;
+                        if (bannerText) bannerText.textContent = `⚠️ 自社株${(_enemyPct * 100).toFixed(1)}%が買い集められています。防衛を検討してください`;
                     } else {
                         banner.style.display = 'none';
                     }
@@ -1803,16 +1804,18 @@
             let p = companies[0];
             // 非上場企業には防衛センターは不要（株主がいるはずがない）
             if (!p.isPublic) return;
-            let otherKeys = Object.keys(p.shareholders).filter(k => k !== 'player');
-            let stolenShares = otherKeys.reduce((s, k) => s + (p.shareholders[k] || 0), 0);
-            let stolenPct = p.shares > 0 ? stolenShares / p.shares : 0;
-            let playerPct = p.shares > 0 ? (p.shareholders['player'] || 0) / p.shares : 0;
+            let floatSh = window.getFloatShares(p);
+            // 敵対株主 = player, market, 金庫株(p.id) 以外
+            let enemyKeys = Object.keys(p.shareholders).filter(k => k !== 'player' && k !== 'market' && k !== p.id && (p.shareholders[k] || 0) > 0);
+            let stolenShares = enemyKeys.reduce((s, k) => s + (p.shareholders[k] || 0), 0);
+            let stolenPct = floatSh > 0 ? stolenShares / floatSh : 0;
+            let playerPct = floatSh > 0 ? (p.shareholders['player'] || 0) / floatSh : 0;
 
-            // 最大敵対株主を特定
-            let topEnemy = otherKeys.sort((a, b) => (p.shareholders[b] || 0) - (p.shareholders[a] || 0))[0];
+            // 最大敵対株主を特定（実企業のみ）
+            let topEnemy = enemyKeys.sort((a, b) => (p.shareholders[b] || 0) - (p.shareholders[a] || 0))[0];
             let topEnCo = topEnemy ? companies.find(cx => cx.id === topEnemy) : null;
-            let topEnName = topEnCo ? topEnCo.name.replace(/\[.*?\]\s*/, '') : (topEnemy === 'market' ? '市場浮動株' : '不明');
-            let topEnPct = topEnemy && p.shares > 0 ? ((p.shareholders[topEnemy] || 0) / p.shares * 100).toFixed(1) : '0';
+            let topEnName = topEnCo ? topEnCo.name.replace(/\[.*?\]\s*/, '') : '不明';
+            let topEnPct = topEnemy && floatSh > 0 ? ((p.shareholders[topEnemy] || 0) / floatSh * 100).toFixed(1) : '0';
 
             // 自社株買い費用計算
             let buyback100 = Math.floor(p.stockPrice * p.shares * 0.05); // 5%買い戻し費用
@@ -5708,15 +5711,17 @@
                 });
             }
             // 🚨 敵対的買収の事前警告
-            if (!isGameOver) {
-                let playerStolenShares = Object.keys(p.shareholders).filter(k => k !== 'player').reduce((s, k) => s + p.shareholders[k], 0);
-                let stolenPct = playerStolenShares / p.shares;
-                if (stolenPct >= 0.2 && stolenPct < 0.35 && !p.tobWarning1) {
+            if (!isGameOver && p.isPublic) {
+                let _ewEnemyKeys = Object.keys(p.shareholders).filter(k => k !== 'player' && k !== 'market' && k !== p.id && (p.shareholders[k] || 0) > 0);
+                let _ewEnemyShares = _ewEnemyKeys.reduce((s, k) => s + (p.shareholders[k] || 0), 0);
+                let _ewFloat = window.getFloatShares(p);
+                let _ewPct = _ewFloat > 0 ? _ewEnemyShares / _ewFloat : 0;
+                if (_ewPct >= 0.2 && _ewPct < 0.35 && !p.tobWarning1) {
                     addLog(`【緊急警告】どこかの投資家が自社の株式を20%以上買い集めています！経営権が狙われています！`, 'alert', 'M&A');
                     p.tobWarning1 = true;
                     setTimeout(() => openHostileDefenseModal(), 300);
                 }
-                if (stolenPct >= 0.35 && stolenPct < 0.5 && !p.tobWarning2) {
+                if (_ewPct >= 0.35 && _ewPct < 0.5 && !p.tobWarning2) {
                     addLog(`【最終警告】自社株の35%以上が握られました！51%を取られると買収され【ゲームオーバー】になります！至急、防衛センターで対策を！`, 'alert', 'M&A');
                     p.tobWarning2 = true;
                     setTimeout(() => openHostileDefenseModal(), 300);
