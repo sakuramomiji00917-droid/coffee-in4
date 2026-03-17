@@ -9418,14 +9418,19 @@ ${ds.desc}`)) {
                     if (window.shareholderChart) window.shareholderChart.destroy();
                     let labels = [], data = [], colors = [], totalHeld = 0;
                     let shArray = Object.keys(target.shareholders).map(k => ({ id: k, shares: target.shareholders[k] })).filter(d => d.shares > 0).sort((a, b) => b.shares - a.shares);
-                    for (let i = 0; i < Math.min(shArray.length, 6); i++) {
-                        let ownerCo = companies.find(c => c.id === shArray[i].id);
-                        labels.push(shArray[i].id === 'player' ? '自社' : (ownerCo ? ownerCo.name.replace(/\[.*?\]\s*/, '').substring(0, 8) : shArray[i].id));
-                        data.push(shArray[i].shares);
-                        colors.push(shArray[i].id === 'player' ? 'var(--primary)' : (ownerCo ? ownerCo.color : '#94a3b8'));
+                    let floatShares = 0;
+                    for (let i = 0; i < shArray.length; i++) {
+                        if (shArray[i].id === 'market') { floatShares += shArray[i].shares; totalHeld += shArray[i].shares; continue; }
+                        if (labels.length < 6) {
+                            let ownerCo = companies.find(c => c.id === shArray[i].id);
+                            labels.push(shArray[i].id === 'player' ? '自社' : (ownerCo ? ownerCo.name.replace(/\[.*?\]\s*/, '').substring(0, 8) : shArray[i].id));
+                            data.push(shArray[i].shares);
+                            colors.push(shArray[i].id === 'player' ? 'var(--primary)' : (ownerCo ? ownerCo.color : '#94a3b8'));
+                        }
                         totalHeld += shArray[i].shares;
                     }
-                    if (target.shares > totalHeld) { labels.push('一般流通'); data.push(target.shares - totalHeld); colors.push('#e2e8f0'); }
+                    floatShares += Math.max(0, target.shares - totalHeld);
+                    if (floatShares > 0) { labels.push('一般流通'); data.push(floatShares); colors.push('#e2e8f0'); }
                     window.shareholderChart = new Chart(ctx, {
                         type: 'doughnut', data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 2, borderColor: '#fff' }] },
                         options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11, family: "'Inter',sans-serif" } } }, tooltip: { callbacks: { label: function (c) { let v = c.raw || 0; return ` ${c.label}: ${v.toLocaleString()}株 (${((v / target.shares) * 100).toFixed(1)}%)`; } } } }, cutout: '65%' }
