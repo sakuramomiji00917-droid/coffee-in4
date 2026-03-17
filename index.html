@@ -6045,7 +6045,7 @@
                     <div style="display:flex;gap:8px;margin-top:4px;">
                         <button class="btn-outline" style="flex:1;border-color:#bfdbfe;color:#1d4ed8;font-size:11px;padding:8px;" onclick="renewStore('${st.id}')">🔄 リニューアル (¥${Math.floor(renewCostStore / 10000).toLocaleString()}万)${ageLabel}</button>
                     </div>
-                    <button class="btn-outline text-danger" style="width:100%;margin-top:6px; border-color:#fecaca;" onclick="closeStore(${st.id})">❌ 閉店する (違約金: 家賃2週分)</button>` : (() => {
+                    <button class="btn-outline text-danger" style="width:100%;margin-top:6px; border-color:#fecaca;" onclick="closeStore('${st.id}')">❌ 閉店する (違約金: 家賃2週分)</button>` : (() => {
                     // 競合店舗: ビル購入ボタン
                     let _dist = globalNetworkData[st.regionKey]?.districts.find(dx => dx.name === st.location);
                     let _prop = _dist ? _dist.properties[st.propIndex] : null;
