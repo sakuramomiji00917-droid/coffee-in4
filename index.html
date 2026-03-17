@@ -1790,7 +1790,7 @@
             // 最大敵対株主を特定
             let topEnemy = otherKeys.sort((a, b) => (p.shareholders[b] || 0) - (p.shareholders[a] || 0))[0];
             let topEnCo = topEnemy ? companies.find(cx => cx.id === topEnemy) : null;
-            let topEnName = topEnCo ? topEnCo.name.replace(/\[.*?\]\s*/, '') : '不明';
+            let topEnName = topEnCo ? topEnCo.name.replace(/\[.*?\]\s*/, '') : (topEnemy === 'market' ? '市場浮動株' : '不明');
             let topEnPct = topEnemy && p.shares > 0 ? ((p.shareholders[topEnemy] || 0) / p.shares * 100).toFixed(1) : '0';
 
             // 自社株買い費用計算
