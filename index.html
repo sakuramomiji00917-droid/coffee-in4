@@ -1722,7 +1722,7 @@
             if (mobNav) mobNav.classList.add('active');
 
             if (id === 'stores') renderStoreList();
-            if (id === 'world') { initGlobalNetwork(); displayDistricts(Object.keys(globalNetworkData)[0]); }
+            if (id === 'world') { initGlobalNetwork(); displayDistricts(window._lastPropertyRegion || Object.keys(globalNetworkData)[0]); }
             if (id === 'company') renderPortfolio();
             if (id === 'hq') updateHQView();
             if (id === 'subsidiaries') renderSubsidiaryList();
@@ -1983,6 +1983,7 @@
                 '不動産': { bg: '#dbeafe', color: '#1d4ed8', bar: '#3b82f6' },
                 '店舗': { bg: '#d1fae5', color: '#065f46', bar: '#059669' },
                 '財務': { bg: '#dbeafe', color: '#1d4ed8', bar: '#3b82f6' },
+                '物価': { bg: '#fef3c7', color: '#92400e', bar: '#f59e0b' },
                 '🔴緊急': { bg: '#fee2e2', color: '#b91c1c', bar: '#dc2626' },
             };
             const getColor = (cat) => catColorMap[cat] || { bg: '#f3f4f6', color: '#374151', bar: '#6b7280' };
@@ -2231,7 +2232,7 @@
                     b.termDepositRate = Math.max(lim.td[0], Math.min(lim.td[1], b.termDepositRate + dir * 0.00020));
                     b.loanRate = Math.max(lim.loan[0], Math.min(lim.loan[1], b.loanRate + dir * 0.00010));
                     if (b.marketCap > 500000000) {
-                        addLog(`【金融】${b.name.replace(/\[.*?\]\s*/, '')}（${b.bankTypeLabel}）が金利を改定しました。預金${(b.depositRate * 100).toFixed(3)}% / 定期${(b.termDepositRate * 100).toFixed(3)}% / 貸出${(b.loanRate * 100).toFixed(3)}%`, 'news', '経済');
+                        addLog(`【金利改定】${b.name.replace(/\[.*?\]\s*/, '')}（${b.bankTypeLabel}）が金利を改定。預金${(b.depositRate * 100).toFixed(3)}% / 定期${(b.termDepositRate * 100).toFixed(3)}% / 貸出${(b.loanRate * 100).toFixed(3)}%`, 'news', '物価');
                     }
                 }
             });
@@ -2536,16 +2537,23 @@
                         if (!adCo) return;
 
                         if (isCoffee && c.id !== 'player') {
+                            // AI知名度: 比例減衰（プレイヤーと同じ公式）
+                            if (!c.brandAwareness) c.brandAwareness = {};
+                            let _aiCurAware = c.brandAwareness[country] || 0;
+                            let _aiDecay = Math.max(0.1, _aiCurAware * 0.02);
+                            c.brandAwareness[country] = Math.max(0, _aiCurAware - _aiDecay);
+
                             // Fix案B: AIコーヒー企業が媒体別広告を実行
-                            // 性格タイプに応じた広告予算（週次・店舗数比例）
                             let storeCount = Math.max(1, (c.stores || []).filter(s => (_cMapAd[s.regionKey] || 'JP') === country).length);
-                            let baseAdBudget = storeCount * 80000; // 1店舗あたり基本¥8万/週
+                            let baseAdBudget = storeCount * 80000;
                             let personalityMult = { 'Aggressive': 1.8, 'Balanced': 1.0, 'Conservative': 0.5, 'Greedy': 0.7 }[c.personality] || 1.0;
                             let totalAIAdBudget = Math.floor(baseAdBudget * personalityMult);
                             if (c.cash < totalAIAdBudget) totalAIAdBudget = Math.floor(c.cash * 0.05);
                             if (totalAIAdBudget <= 0) return;
 
-                            // 媒体選択（性格タイプ別の好み）
+                            // 店舗数補正（プレイヤーと同じ公式）
+                            let _aiStoreMult = Math.min(1.5, 0.3 + storeCount * 0.1);
+
                             const _aiMediaMix = {
                                 'Aggressive': { tv: 0.4, sns: 0.4, flyer: 0.1, billboard: 0.1 },
                                 'Balanced':   { tv: 0.3, sns: 0.3, flyer: 0.2, billboard: 0.2 },
@@ -2559,8 +2567,8 @@
                                 let spend = Math.floor(totalAIAdBudget * ratio);
                                 if (spend <= 0) return;
                                 let mediaBonusVal = (adCo.adBonus || adCo.bonus || {})[adKey] || 1.0;
-                                let effectScale = Math.log10(spend / 10000 + 1) * 2;
-                                totalAwarenessGain += effectScale * mediaBonusVal;
+                                let effectScale = Math.log10(spend / 10000 + 1) * 0.5;
+                                totalAwarenessGain += effectScale * mediaBonusVal * _aiStoreMult;
                                 totalFee += spend;
                             });
                             if (totalFee > 0 && c.cash >= totalFee) {
@@ -2570,9 +2578,7 @@
                                 adCo.lastRevenue = (adCo.lastRevenue || 0) + totalFee;
                                 adCo.lastExpense = (adCo.lastExpense || 0) + Math.floor(totalFee * 0.30);
                                 adCo.lastProfit = adCo.lastRevenue - adCo.lastExpense;
-                                // 知名度上昇（AIにもbrandAwarenessを付与）
-                                if (!c.brandAwareness) c.brandAwareness = {};
-                                c.brandAwareness[country] = Math.min(100, (c.brandAwareness[country] || 0) + totalAwarenessGain * 0.5);
+                                c.brandAwareness[country] = Math.min(100, (c.brandAwareness[country] || 0) + totalAwarenessGain);
                             }
                         } else if (!isCoffee) {
                             // 非コーヒー: 手元資金の2%（従来通り）
@@ -2595,10 +2601,17 @@
                     let adCo = adCoId ? companies.find(a => a.id === adCoId) : null;
 
                     let hasStore = p.stores.some(s => _cMapAd[s.regionKey] === country);
-                    let baseDecay = hasStore ? 0.5 : 1.0;
-                    p.brandAwareness[country] = Math.max(0, (p.brandAwareness[country] || 0) - baseDecay);
+                    let _curAware = p.brandAwareness[country] || 0;
+                    // 比例減衰: 出店あり2%、なし5%、r9焙煎機0.5%
+                    let _decayRate = p._roasterNoDecay ? 0.005 : (hasStore ? 0.02 : 0.05);
+                    let baseDecay = Math.max(0.1, _curAware * _decayRate);
+                    p.brandAwareness[country] = Math.max(0, _curAware - baseDecay);
 
                     if (!adCo) return;
+
+                    // 店舗数補正: 1店舗=0.4、5店舗=0.8、15店舗以上=1.5
+                    let _storeCountAd = p.stores.filter(s => _cMapAd[s.regionKey] === country).length;
+                    let _storeMult = Math.min(1.5, 0.3 + _storeCountAd * 0.1);
 
                     let totalSpend = 0, awarenessGain = 0;
                     Object.keys(adTypes).forEach(adKey => {
@@ -2607,8 +2620,8 @@
                         if (p.cash < spend) spend = Math.min(spend, Math.max(0, p.cash));
                         if (spend <= 0) return;
                         let mediaBonusVal = (adCo.adBonus || adCo.bonus || {})[adKey] || 1.0;
-                        let effectScale = Math.log10(spend / 10000 + 1) * 2;
-                        awarenessGain += effectScale * mediaBonusVal;
+                        let effectScale = Math.log10(spend / 10000 + 1) * 0.5;
+                        awarenessGain += effectScale * mediaBonusVal * _storeMult;
                         totalSpend += spend;
                     });
                     if (totalSpend > 0) {
@@ -2807,8 +2820,22 @@
                         if (!b) continue;
                         let rate = b.loanRate || 0.005;
                         let intPay = Math.floor(c.bankDebts[bId] * rate);
-                        let principalRepay = Math.max(1, Math.floor(c.bankDebts[bId] * 0.05)); // 5%元本自動返済
+                        let principalRepay = Math.max(1, Math.floor(c.bankDebts[bId] * 0.05));
                         let totalPay = intPay + principalRepay;
+
+                        // 残高チェック: 足りなければ払える範囲に縮小
+                        if (c.id !== 'player' && c.cash < totalPay) {
+                            if (c.cash >= intPay) {
+                                // 利息だけ払って元本返済スキップ
+                                principalRepay = Math.max(0, Math.floor((c.cash - intPay) * 0.5));
+                                totalPay = intPay + principalRepay;
+                            } else {
+                                // 全額払えない → 持ってる分だけ利息に充当
+                                intPay = Math.max(0, Math.floor(c.cash * 0.8));
+                                principalRepay = 0;
+                                totalPay = intPay;
+                            }
+                        }
 
                         c.cash -= totalPay;
                         b.cash += totalPay;
@@ -3444,17 +3471,150 @@
                             addLog('【警告】' + s.name + ' の満足度が' + s.satisfaction + 'まで低下！常連客が離れています。価格・人員を見直してください。', 'alert', '店舗');
                         }
 
-                        // ── AI店長自律調整 ──
-                        if (c.id !== 'player' && s.hasManager) {
-                            let _aiCapacity = (s.staffCount * 1500) + 2000; // 店長込み想定
-                            if (s.missedTraffic > handledTraffic * 0.20 && s.staffCount < 10)
-                                s.staffCount = Math.min(10, s.staffCount + 1);
-                            if (_aiCapacity > finalTraffic * 2.0 && s.staffCount > 1)
-                                s.staffCount = Math.max(1, s.staffCount - 1);
-                            if (s.satisfaction < 40 && (s.price || 500) > 300)
-                                s.price = Math.max(300, (s.price || 500) - 50);
-                            if (s.satisfaction > 75 && (s.regulars || 0) > finalTraffic * 0.25 && (s.price || 500) < 1500)
-                                s.price = Math.min(1500, (s.price || 500) + 50);
+                        // ═══ 店舗診断エンジン（毎週・全店舗） ═══
+                        let dKey2 = `${s.regionKey}_${s.location}`;
+                        let _dInfo = districtDemands[dKey2];
+                        let _areaStores = _dInfo ? _dInfo.stores : [];
+                        let _myAppeal = s.tempAppeal || 0;
+                        let _totalAppeal = _areaStores.reduce((sum, x) => sum + (x.store.tempAppeal || 0), 0);
+                        let _shareRatio = _totalAppeal > 0 ? _myAppeal / _totalAppeal : 0;
+                        let _missedRatio = finalTraffic > 0 ? s.missedTraffic / finalTraffic : 0;
+                        let _capRatio = maxCapacity > 0 ? Math.min(1, handledTraffic / maxCapacity) : 0;
+                        let _regRatio = (s.traffic || 1) > 0 ? (s.regulars || 0) / s.traffic : 0;
+                        // 同エリア競合の平均価格
+                        let _areaRivals = _areaStores.filter(x => x.compId !== c.id);
+                        let _areaAvgPrice = _areaRivals.length > 0 ? _areaRivals.reduce((sum, x) => sum + (x.store.price || 500), 0) / _areaRivals.length : (s.price || 1500);
+                        let _priceRatio = _areaAvgPrice > 0 ? (s.price || 1500) / _areaAvgPrice : 1;
+
+                        // 5つの診断スコア + メニュー力・広告力（0〜100）
+                        let _menuCount = (c.unlockedMenus || []).length;
+                        let _avgStarD = _menuCount > 0 && c.menuStars ? (c.unlockedMenus || []).reduce((s, m) => s + ((c.menuStars[m]) || 1), 0) / _menuCount : 1;
+                        let _menuScore = Math.min(100, Math.floor(_menuCount * 8 + _avgStarD * 5));
+                        let _diagCountry = ({'TOKYO':'JP','OSAKA':'JP','USA':'USA','CHINA':'CHINA','UK':'UK','KOREA':'KOREA','AUSTRALIA':'AUS','CANADA':'CAN','FRANCE':'FRA','GERMANY':'GER','INDIA':'IND'})[s.regionKey] || 'JP';
+                        let _awareness = (c.brandAwareness || {})[_diagCountry] || 0;
+                        let _brandScore = Math.min(100, Math.floor(_awareness));
+                        s._diag = {
+                            attract: Math.min(100, Math.max(0, Math.floor(_shareRatio * 200))),
+                            price: Math.min(100, Math.max(0, Math.floor(100 - Math.abs(_priceRatio - 1) * 120))),
+                            capacity: Math.min(100, Math.max(0, _missedRatio < 0.05 ? 100 : Math.floor(100 - _missedRatio * 200))),
+                            competitive: Math.min(100, Math.max(0, Math.floor(_shareRatio * 300 - 20))),
+                            profit: Math.min(100, Math.max(0, _storeRealProfit > 0 ? Math.floor(50 + Math.min(50, _storeRealProfit / (rev || 1) * 150)) : Math.floor(50 + _storeRealProfit / Math.max(1, rent) * 30))),
+                            menu: _menuScore,
+                            brand: _brandScore
+                        };
+                        // ボトルネック判定（プレイヤーのみUI用に保存）
+                        if (c.id === 'player') {
+                            let _bn = [];
+                            if (s._diag.capacity < 40) _bn.push('対応力不足');
+                            if (s._diag.price < 40 && _priceRatio > 1.15) _bn.push('価格が高い');
+                            if (s._diag.price < 40 && _priceRatio < 0.70) _bn.push('価格が安すぎ');
+                            if (s._diag.attract < 30) _bn.push('集客力不足');
+                            if (s._diag.competitive < 30 && _areaRivals.length > 0) _bn.push('競合が強い');
+                            if (s._diag.profit < 30) _bn.push('採算割れ');
+                            if (s._diag.menu < 25) _bn.push('メニュー不足');
+                            if (s._diag.brand < 20) _bn.push('知名度不足');
+                            s._diag.bottlenecks = _bn;
+                            // エリア比較用データ保存（プレイヤーのみ）
+                            s._diag.areaRivals = _areaRivals.map(x => {
+                                let _rivalCo = companies.find(co => co.id === x.compId);
+                                return {
+                                    name: (_rivalCo?.name || '').replace(/\[.*?\]\s*/g, ''),
+                                    appeal: Math.floor(x.store.tempAppeal || 0),
+                                    price: x.store.price || 500,
+                                    share: _totalAppeal > 0 ? Math.floor((x.store.tempAppeal / _totalAppeal) * 100) : 0,
+                                    customers: (x.store.contestedTraffic || 0) + (x.store.regulars || 0),
+                                    satisfaction: x.store.satisfaction || 0,
+                                    menuCount: (_rivalCo?.unlockedMenus || []).length,
+                                    brandAware: (() => {
+                                        let _rc = ({'TOKYO':'JP','OSAKA':'JP','USA':'USA','CHINA':'CHINA','UK':'UK','KOREA':'KOREA','AUSTRALIA':'AUS','CANADA':'CAN','FRANCE':'FRA','GERMANY':'GER','INDIA':'IND'})[x.store.regionKey] || 'JP';
+                                        return (_rivalCo?.brandAwareness || {})[_rc] || 0;
+                                    })()
+                                };
+                            });
+                            s._diag.myShare = Math.floor(_shareRatio * 100);
+                            s._diag.areaAvgPrice = Math.floor(_areaAvgPrice);
+                        }
+
+                        // ═══ スマート店長AI（プレイヤー店舗・診断ベース判断） ═══
+                        if (c.id === 'player' && s.hasManager && s.managerData && (s.managerAutoMode !== false)) {
+                            let _opsStar = s.managerData.stats ? s.managerData.stats[1] : 1; // 運営★
+                            let _mgrLv = s.managerLevel || 1;
+                            // 判断精度: ★1はノイズ±30, ★5はノイズ±5
+                            let _noise = Math.floor((6 - _opsStar) * 6);
+                            let _addNoise = (score) => score + Math.floor(Math.random() * _noise * 2 - _noise);
+                            // 判断頻度: ★1-2は3週に1回, ★3は2週に1回, ★4-5は毎週
+                            let _freq = _opsStar >= 4 ? 1 : _opsStar >= 3 ? 2 : 3;
+                            if (week % _freq !== 0) { /* skip this week */ }
+                            else {
+                                // 同時対処数: ★1は1つ, ★3は2つ, ★5は全部
+                                let _maxActions = _opsStar >= 5 ? 99 : _opsStar >= 3 ? 2 : 1;
+                                let _actions = 0;
+                                let _diagN = { // ノイズ入りスコア（店長の認識）
+                                    capacity: _addNoise(s._diag.capacity),
+                                    price: _addNoise(s._diag.price),
+                                    profit: _addNoise(s._diag.profit)
+                                };
+                                let _oldPrice = s.price || 1500;
+                                let _oldStaff = s.staffCount || 1;
+                                // 値幅: ★1は100円, ★3は50円, ★5は50円
+                                let _priceStep = _opsStar >= 3 ? 50 : 100;
+
+                                // 判断1: キャパ不足 → バイト増員
+                                if (_actions < _maxActions && _diagN.capacity < 40 && _missedRatio > 0.15) {
+                                    s.staffCount = Math.min(10, (s.staffCount || 1) + 1);
+                                    _actions++;
+                                    if (s.staffCount !== _oldStaff) addLog(`【店長判断】${s.name}: バイト増員 ${_oldStaff}→${s.staffCount}人（逃し客${Math.floor(_missedRatio*100)}%）`, 'news', '店舗', 2);
+                                }
+                                // 判断2: 人員過剰 → バイト減員
+                                if (_actions < _maxActions && _diagN.capacity > 85 && _capRatio < 0.4 && s.staffCount > 1) {
+                                    s.staffCount = Math.max(1, s.staffCount - 1);
+                                    _actions++;
+                                    if (s.staffCount !== _oldStaff) addLog(`【店長判断】${s.name}: バイト減員 ${_oldStaff}→${s.staffCount}人（人件費削減）`, 'news', '店舗', 2);
+                                }
+                                // 判断3: 価格が高すぎ → 値下げ
+                                if (_actions < _maxActions && _diagN.price < 35 && _priceRatio > 1.15 && s.satisfaction < 65) {
+                                    let _cut = _priceStep * (1 + Math.floor((_priceRatio - 1.15) * 5));
+                                    s.price = Math.max(300, (s.price || 1500) - _cut);
+                                    _actions++;
+                                    if (s.price !== _oldPrice) addLog(`【店長判断】${s.name}: 値下げ ¥${_oldPrice.toLocaleString()}→¥${s.price.toLocaleString()}（競合平均¥${Math.floor(_areaAvgPrice).toLocaleString()}対比）`, 'news', '店舗', 2);
+                                }
+                                // 判断4: 値上げ余地 → 値上げ
+                                if (_actions < _maxActions && _diagN.profit < 50 && s.satisfaction > 72 && _regRatio > 0.25 && _priceRatio < 1.20) {
+                                    s.price = Math.min(3000, (s.price || 1500) + _priceStep);
+                                    _actions++;
+                                    if (s.price !== _oldPrice) addLog(`【店長判断】${s.name}: 値上げ ¥${_oldPrice.toLocaleString()}→¥${s.price.toLocaleString()}（常連率${Math.floor(_regRatio*100)}%で安定）`, 'news', '店舗', 2);
+                                }
+                                // ★4以上: 先読み判断（来週の逃し客増加を予測して先にバイト増員）
+                                if (_opsStar >= 4 && _actions < _maxActions && _missedRatio > 0.08 && _missedRatio <= 0.15 && s.staffCount < 10) {
+                                    let _prevStaff = s.staffCount;
+                                    s.staffCount = Math.min(10, s.staffCount + 1);
+                                    if (s.staffCount !== _prevStaff) addLog(`【店長先読み】${s.name}: 混雑予兆を察知し予防増員 ${_prevStaff}→${s.staffCount}人`, 'news', '店舗', 2);
+                                }
+                            }
+                        }
+                        // 店長不在店舗は診断パネルで確認（ニュースには出さない）
+
+                        // ── AI店長自律調整（診断ベース・★3相当） ──
+                        if (c.id !== 'player' && s.hasManager && s._diag && week % 2 === 0) {
+                            let _aiNoise = 18;
+                            let _n = (v) => v + Math.floor(Math.random() * _aiNoise * 2 - _aiNoise);
+                            let _aiActions = 0;
+                            // 対応力不足 → 増員
+                            if (_aiActions < 2 && _n(s._diag.capacity) < 40 && _missedRatio > 0.15 && s.staffCount < 10) {
+                                s.staffCount = Math.min(10, s.staffCount + 1); _aiActions++;
+                            }
+                            // 人員過剰 → 減員
+                            if (_aiActions < 2 && _n(s._diag.capacity) > 85 && _capRatio < 0.4 && s.staffCount > 1) {
+                                s.staffCount = Math.max(1, s.staffCount - 1); _aiActions++;
+                            }
+                            // 価格高すぎ → 値下げ
+                            if (_aiActions < 2 && _n(s._diag.price) < 35 && _priceRatio > 1.15 && s.satisfaction < 60) {
+                                s.price = Math.max(300, (s.price || 500) - 100); _aiActions++;
+                            }
+                            // 値上げ余地
+                            if (_aiActions < 2 && _n(s._diag.profit) < 50 && s.satisfaction > 70 && _regRatio > 0.20 && _priceRatio < 1.20) {
+                                s.price = Math.min(2500, (s.price || 500) + 100); _aiActions++;
+                            }
                         }
 
                         // ── プレイヤー店舗：赤字継続の警告 ──
@@ -4117,9 +4277,9 @@
                         // 20%未満の銘柄を優先買い増し（持分法収益獲得のため）
                         if (Math.random() < _buyProb && c.cash > 50000000) {
                             let underTarget = companies.filter(t =>
-                                t.id !== c.id && t.isPublic && !t.isBankrupt && t.id !== 'player' &&
-                                (t.shareholders[c.id] || 0) / Math.max(1, t.shares) < 0.20 &&
-                                t.qNet > 0 // 利益出てる企業を狙う
+                                t.id !== c.id && t.isPublic && !t.isBankrupt &&
+                                (t.shareholders[c.id] || 0) / Math.max(1, t.shares) < (t.id === 'player' ? 0.10 : 0.20) &&
+                                t.qNet > 0
                             );
                             if (underTarget.length > 0) {
                                 let tgt = underTarget.sort((a, b) => (b.qNet || 0) - (a.qNet || 0))[0];
@@ -4134,7 +4294,7 @@
                                     c.cash -= cost;
                                     tgt.shareholders[c.id] = nowHold + buyShares;
                                     let newRatio = ((nowHold + buyShares) / tgt.shares * 100).toFixed(1);
-                                    if (newRatio > 10) addLog(`【投資】${c.name.replace(/\[.*?\]\s*/, '')} が ${tgt.name.replace(/\[.*?\]\s*/, '')} を買い増し（${newRatio}%保有）`, 'normal', '市場');
+                                    if (newRatio > 20) addLog(`【投資】${c.name.replace(/\[.*?\]\s*/, '')} が ${tgt.name.replace(/\[.*?\]\s*/, '')} を買い増し（${newRatio}%保有）`, 'normal', '市場');
                                 }
                             }
                         }
@@ -4157,7 +4317,7 @@
                                     c.lastRevenue = (c.lastRevenue || 0) + _sogoGain;
                                     c.lastExpense = (c.lastExpense || 0) + Math.floor(_sogoGain * 0.15);
                                     c.lastProfit = c.lastRevenue - c.lastExpense;
-                                    if (gain > 500000000) {
+                                    if (gain > 1000000000) {
                                         addLog(`【トレード】${c.name.replace(/\[.*?\]\s*/, '')} が保有株を売却。売却益 ¥${Math.floor(gain / 10000).toLocaleString()}万を確保。`, 'normal', '経済');
                                     }
                                 }
@@ -4345,7 +4505,59 @@
                         }
                     }
                     if (!c.lastDilutionWeek || (week - c.lastDilutionWeek) >= 48) {
-                        if (c.parent !== 'player') {
+                        // 親会社チェック: 親がいる場合は許可制
+                        let _canDilute = true;
+                        if (c.parent === 'player') {
+                            // プレイヤー傘下 → 議決キューに投げる
+                            _canDilute = false;
+                            let _reason = c.activeTOB_v2 ? 'TOB防衛のため' : '資金難のため';
+                            let _pct = c.activeTOB_v2 ? 20 : 10;
+                            let _newShares = Math.floor(c.shares * _pct / 100);
+                            let _curPct = (window.getFloatPct(c, 'player') * 100).toFixed(1);
+                            let _afterPct = ((c.shareholders['player'] || 0) / (window.getFloatShares(c) + _newShares) * 100).toFixed(1);
+                            let _additionalCost = 0;
+                            if (parseFloat(_afterPct) <= 50) {
+                                let _needed = Math.floor((window.getFloatShares(c) + _newShares) * 0.51) + 1 - (c.shareholders['player'] || 0);
+                                _additionalCost = _needed > 0 ? _needed * c.stockPrice : 0;
+                            }
+                            if ((c.activeTOB_v2 && Math.random() < 0.3) || (c.cash < 5000000 && c.stockPrice > 1000 && Math.random() < 0.05)) {
+                                let _cName = c.name.replace(/\[.*?\]\s*/g, '');
+                                window.activeVotingQueue.push({
+                                    type: 'subsidiary_dilution', target: c,
+                                    title: `子会社 ${_cName} の公募増資申請`,
+                                    desc: `${_cName} が${_reason}、${_pct}%の公募増資を申請しています。<br>
+                                        現在の支配率: <b>${_curPct}%</b> → 承認後: <b style="color:${parseFloat(_afterPct)<=50?'var(--danger)':'var(--success)'};">${_afterPct}%</b><br>
+                                        ${parseFloat(_afterPct) <= 50 ? `⚠️ 過半数を割ります。維持には追加 <b style="color:var(--danger);">¥${Math.floor(_additionalCost/10000).toLocaleString()}万</b> が必要` : '✅ 過半数は維持されます'}`,
+                                    yesLabel: parseFloat(_afterPct) <= 50 ? `承認＋追加取得 (¥${Math.floor(_additionalCost/10000).toLocaleString()}万)` : '承認する',
+                                    noLabel: '❌ 却下する',
+                                    onVoted: (approved) => {
+                                        if (approved) {
+                                            executeCompanyDilution(c, _pct);
+                                            if (parseFloat(_afterPct) <= 50 && _additionalCost > 0 && companies[0].cash >= _additionalCost) {
+                                                let _buyShares = Math.floor(_additionalCost / c.stockPrice);
+                                                companies[0].cash -= _buyShares * c.stockPrice;
+                                                c.shareholders['player'] = (c.shareholders['player'] || 0) + _buyShares;
+                                                c.shareholders['market'] = Math.max(0, (c.shareholders['market'] || 0) - _buyShares);
+                                                addLog(`【追加取得】${_cName} の株を追加取得し、支配率を維持しました。`, 'success', 'M&A', 3);
+                                            }
+                                        } else {
+                                            addLog(`【却下】${_cName} の公募増資申請を親会社として却下しました。`, 'normal', 'M&A', 2);
+                                        }
+                                        updateDashboard();
+                                    }
+                                });
+                            }
+                        } else if (c.parent) {
+                            // AI親会社 → 支配率50%割るなら自動否決
+                            let _parentCo = companies.find(x => x.id === c.parent);
+                            if (_parentCo) {
+                                let _pctNow = window.getFloatPct(c, c.parent);
+                                let _newSh = Math.floor(c.shares * 0.10);
+                                let _pctAfter = (_parentCo.shareholders?.[c.parent] || 0) / (window.getFloatShares(c) + _newSh);
+                                if (_pctAfter <= 0.50) _canDilute = false;
+                            }
+                        }
+                        if (_canDilute) {
                             if (c.activeTOB_v2 && Math.random() < 0.3) {
                                 addLog(`【防衛】${c.name.replace(/\[.*?\]\s*/, '')}が対抗措置として新株発行を強行！`, 'alert', 'M&A');
                                 if (typeof executeCompanyDilution === 'function') executeCompanyDilution(c, 20);
@@ -4940,8 +5152,8 @@
                         b.depositRate = Math.max(0.0001, Math.min(0.005, (b.depositRate || 0.001) * marketEvent.rateMult));
                         b.termDepositRate = Math.max(0.001, Math.min(0.01, (b.termDepositRate || 0.003) * marketEvent.rateMult));
                     });
-                    if (marketEvent.rateMult > 1.0) addLog(`【金融】金利が上昇傾向に。銀行の貸出・預金金利が改定されました。`, 'alert', '経済');
-                    else if (marketEvent.rateMult < 1.0) addLog(`【金融】金利が低下傾向に。銀行の金利が引き下げられました。`, 'success', '経済');
+                    if (marketEvent.rateMult > 1.0) addLog(`【金利上昇】金利が上昇傾向に。銀行の貸出・預金金利が改定されました。`, 'alert', '物価');
+                    else if (marketEvent.rateMult < 1.0) addLog(`【金利低下】金利が低下傾向に。銀行の金利が引き下げられました。`, 'success', '物価');
                 }
 
                 // ── コーヒー売上への影響（一時的ボーナス）──
@@ -5267,7 +5479,7 @@
                                             if (_fPct > 0.50 && !c.parent) {
                                                 c.parent = bidderCo.id;
                                                 c.name = `[${_bdrN}傘下] ${_tgtN}`;
-                                                addLog(`【買収完了】${_bdrN} が ${_tgtN} を子会社化しました。（${Math.floor(_fPct*100)}%取得）`, 'alert', 'M&A');
+                                                addLog(`【買収完了】${_bdrN} が ${_tgtN} を子会社化しました。（${Math.floor(_fPct*100)}%取得）`, c.sector === 'coffee' ? 'alert' : 'news', 'M&A', c.sector === 'coffee' ? 4 : 2);
                                             }
                                         }
                                     });
@@ -5282,7 +5494,7 @@
                                     if (_fPct > 0.50) {
                                         c.parent = bidderCo.id;
                                         c.name = `[${bdrName}傘下] ${tgtName}`;
-                                        addLog(`【買収完了】${bdrName} が ${tgtName} を子会社化しました。（${Math.floor(_fPct*100)}%取得）`, 'alert', 'M&A');
+                                        addLog(`【買収完了】${bdrName} が ${tgtName} を子会社化しました。（${Math.floor(_fPct*100)}%取得）`, c.sector === 'coffee' ? 'alert' : 'news', 'M&A', c.sector === 'coffee' ? 4 : 2);
                                     } else if (_acquired > 0) {
                                         addLog(`【TOB部分成立】${bdrName} が ${tgtName} の株式 ${Math.floor(_fPct*100)}% を取得。過半数未達。`, 'normal', 'M&A');
                                     } else {
@@ -5363,6 +5575,37 @@
 
             let currentProfit = pNet + pDiv + pPropInc + (window.weeklyStockSaleProfit || 0) + (window.weeklySiphonedCash || 0) + (window._pBrandRoyalty || 0) - totalInfraPaid;
 
+            // 📊 週次P/L履歴保存（プレイヤーのみ・最新24週）
+            if (!p._plWeekly) p._plWeekly = [];
+            if (!p._plQuarterly) p._plQuarterly = [];
+            p._plWeekly.push({
+                w: week,
+                rev: pRev,
+                exp: pExp,
+                net: currentProfit,
+                tax: pTax,
+                div: pDiv,
+                prop: pPropInc,
+                cogs: window._pCogs || 0,
+                hr: Math.floor(pExp - (window._pCogs || 0) - (window._pSocialIns || 0) - (window._pUtility || 0) - (window._pRepair || 0) - (window._pLoanInterest || 0) - (window._pHQRent || 0) - (window._pConsumptionTax || 0)),
+                rent: window._pHQRent || 0,
+                repair: window._pRepair || 0,
+                interest: window._pLoanInterest || 0,
+                ad: window._pAdSpend || 0,
+                ctax: window._pConsumptionTax || 0,
+                social: window._pSocialIns || 0,
+                util: window._pUtility || 0,
+                brand: window._pBrandRoyalty || 0,
+                infra: totalInfraPaid,
+                stock: window.weeklyStockSaleProfit || 0,
+                siphon: window.weeklySiphonedCash || 0,
+                cash: p.cash,
+                mc: p.marketCap,
+                stores: p.stores.length,
+                customers: p.stores.reduce((s, st) => s + (st.contestedTraffic || 0) + (st.regulars || 0), 0)
+            });
+            if (p._plWeekly.length > 24) p._plWeekly.shift();
+
             // 🚨 【新規】四半期の定時株主総会をキューに積む
             if (week > 1 && (week - 1) % 12 === 0) {
                 companies.forEach(c => {
@@ -5371,6 +5614,19 @@
                     if (c.id === 'player') {
                         if (c.lastQProfit > 0) { c._profitStreak = (c._profitStreak || 0) + 1; }
                         else { c._profitStreak = 0; }
+                        // 四半期P/L履歴保存（最新8四半期）
+                        let _qWeeks = p._plWeekly ? p._plWeekly.filter(w => w.w > week - 13) : [];
+                        p._plQuarterly = p._plQuarterly || [];
+                        p._plQuarterly.push({
+                            w: week,
+                            rev: _qWeeks.reduce((s, w) => s + w.rev, 0),
+                            exp: _qWeeks.reduce((s, w) => s + w.exp, 0),
+                            net: _qWeeks.reduce((s, w) => s + w.net, 0),
+                            cash: p.cash,
+                            mc: p.marketCap,
+                            stores: p.stores.length
+                        });
+                        if (p._plQuarterly.length > 8) p._plQuarterly.shift();
                     }
                     // 四半期収益・費用を確定して次期リセット
                     c.prevLastRevenue = c.lastRevenue || 0; c.prevLastExpense = c.lastExpense || 0; c.prevLastProfit = c.lastProfit || 0;
@@ -5383,11 +5639,11 @@
                         if (margin > 0.35 && Math.random() < 0.3) {
                             // 利益率が非常に高い → 需要過多で値上げ
                             c.servicePriceMult = Math.min(2.0, Math.round((c.servicePriceMult + 0.1) * 10) / 10);
-                            addLog(`【価格改定】需要増につき、${c.name.replace(/\[.*?\]\s*/, '')} がサービス契約料を値上げしました。(現在: ${Math.round((c.servicePriceMult - 1) * 100)}%)`, 'warning', '経済');
+                            addLog(`【値上げ】需要増につき、${c.name.replace(/\[.*?\]\s*/, '')} がサービス契約料を値上げ。(現在: +${Math.round((c.servicePriceMult - 1) * 100)}%)`, 'warning', '物価');
                         } else if (margin < 0.10 && c.servicePriceMult > 0.5 && Math.random() < 0.4) {
                             // 利益率が低い/赤字 → シェア拡大のために値下げ
                             c.servicePriceMult = Math.max(0.5, Math.round((c.servicePriceMult - 0.1) * 10) / 10);
-                            addLog(`【価格改定】シェア獲得のため、${c.name.replace(/\[.*?\]\s*/, '')} がサービス契約料を値下げしました。(現在: ${Math.round((c.servicePriceMult - 1) * 100)}%)`, 'success', '経済');
+                            addLog(`【値下げ】シェア獲得のため、${c.name.replace(/\[.*?\]\s*/, '')} がサービス契約料を値下げ。(現在: ${Math.round((c.servicePriceMult - 1) * 100)}%)`, 'success', '物価');
                         }
                     }
                     if (c.lastQProfit > 0 && c.dividendRate > 0) {
@@ -5593,7 +5849,7 @@
                             proposals.push({
                                 title: `貸付金利の引き上げ要求`,
                                 desc: `収益性向上のため、貸付金利を上げ、より貪欲な経営を目指すべきです。`,
-                                action: () => { c.loanRate = (c.loanRate || 0.005) + 0.002; addLog(`【総会】銀行 ${c.name.replace(/\[.*?\]\s*/, '')} が金利を引き上げました。`, 'warning', '経済'); }
+                                action: () => { c.loanRate = (c.loanRate || 0.005) + 0.002; addLog(`【利上げ】銀行 ${c.name.replace(/\[.*?\]\s*/, '')} が金利を引き上げ。`, 'warning', '物価'); }
                             });
                         } else if (c.sector === 're') {
                             proposals.push({
@@ -5623,7 +5879,7 @@
                         }
 
                         // 筆頭株主判定
-                        let allShares = Object.entries(c.shareholders).filter(([k]) => k !== 'player');
+                        let allShares = Object.entries(c.shareholders).filter(([k]) => k !== 'player' && k !== 'market' && k !== c.id);
                         let topAI = allShares.length > 0 ? allShares.reduce((a, b) => a[1] > b[1] ? a : b) : null;
                         let topAIShares = topAI ? topAI[1] : 0;
                         let playerIsTop = (c.shareholders['player'] || 0) > topAIShares;
@@ -5852,6 +6108,27 @@
                     }
                 });
 
+                // ── 自社定期レポート（4週ごと）──
+                if (week % 4 === 0 && week > 4) {
+                    // 子会社業績サマリー（4週ごと・これだけ残す）
+                    let _subs = companies.filter(c => c.parent === 'player' && !c.isBankrupt);
+                    if (_subs.length > 0) {
+                        let _subProfit = _subs.reduce((s, c) => s + (c.qNet || 0), 0);
+                        let _blackCnt = _subs.filter(c => (c.qNet || 0) >= 0).length;
+                        let _redCnt = _subs.length - _blackCnt;
+                        addLog(`【グループ経営】傘下${_subs.length}社 合計損益: ${_subProfit >= 0 ? '+' : ''}¥${Math.floor(_subProfit / 10000).toLocaleString()}万（黒字${_blackCnt}社 / 赤字${_redCnt}社）`, _subProfit >= 0 ? 'news' : 'warning', '自社', 3);
+                    }
+                    // プレイヤー保有銘柄の急変通知（±15%以上）
+                    companies.forEach(hc => {
+                        if (hc.id === 'player' || hc.isBankrupt || !(hc.shareholders['player'] > 0)) return;
+                        if (hc.prevStockPrice && hc.prevStockPrice > 0) {
+                            let _hcChg = (hc.stockPrice / hc.prevStockPrice - 1) * 100;
+                            if (_hcChg <= -15) addLog(`【保有銘柄急落】${hc.name.replace(/\[.*?\]\s*/g,'')} が前週比${_hcChg.toFixed(0)}%の急落。売却を検討？`, 'alert', 'M&A', 4);
+                            else if (_hcChg >= 15) addLog(`【保有銘柄急騰】${hc.name.replace(/\[.*?\]\s*/g,'')} が前週比+${_hcChg.toFixed(0)}%の急騰！利確のチャンス。`, 'success', 'M&A', 3);
+                        }
+                    });
+                }
+
                 // ── 市場全体の動向コメント（12週ごと）──
                 if (week % 12 === 0) {
                     let avgChange = allCos.reduce((s, c) => s + (c.prevStockPrice ? (c.stockPrice / c.prevStockPrice - 1) : 0), 0) / Math.max(1, allCos.length);
@@ -5978,7 +6255,7 @@
                 <div class="flex-between" style="margin-bottom: 24px; border-bottom: 3px solid var(--primary); padding-bottom: 12px; flex-wrap:wrap; gap:10px;">
                     <h2 style="margin:0; border:none; padding:0;"><span style="font-size:24px;">🏪</span> 店舗管理 ＆ 競合視察</h2>
                     <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                        <button class="btn-primary" style="font-size:13px; padding:8px 14px; background:var(--gold); flex-shrink:0;" onclick="openManagerRoster()">👔 店長名簿</button>
+                        <button class="btn-primary" style="font-size:13px; padding:8px 14px; background:#ef4444; flex-shrink:0;" onclick="openMaintenancePanel()">🔧 修繕リスト</button>
                         <select id="store-view-selector" onchange="changeStoreView(this.value)" style="width: auto; min-width: 120px; padding: 8px; font-weight:bold; cursor:pointer; border-radius:8px; border:2px solid var(--primary); color:var(--primary); background:#fff; font-size:13px;">
                             ${optionsHtml}
                         </select>
@@ -6149,29 +6426,9 @@
                     ${meterUI}
                 `;
 
-                // 店長モード判定
+                // 店長モード判定（新: 診断ベース自動経営は週次処理で実行済み）
                 let mgrAutoMode = st.hasManager && st.managerData && (st.managerAutoMode !== false);
-                // 店長推奨値（店長がいる場合）
-                // 店長推奨価格: 現在価格を基準に店長タイプ・Lvで微調整（急激な変化を防ぐ）
-                let _mgrBase = currentPrice > 0 ? currentPrice : 1200;
-                let _mgrMarginBonus = (st.managerData?.bonus?.margin || 1.0) - 1.0; // 0〜0.4
-                let _mgrLvBonus = ((st.managerLevel || 1) - 1) * 20; // Lv5で+80
-                let mgrRecommendedPrice = st.hasManager && st.managerData
-                    ? Math.min(2000, Math.max(600, _mgrBase + Math.floor(_mgrMarginBonus * 200) + _mgrLvBonus))
-                    : currentPrice;
-                let mgrRecommendedStaff = st.hasManager && st.managerData
-                    ? Math.max(1, Math.ceil((st.traffic || 3000) / 1200))
-                    : (st.staffCount || 1);
-                // 店長モードなら自動で推奨値をセット
-                if (mgrAutoMode && st.hasManager) {
-                    if (Math.abs(st.price - mgrRecommendedPrice) > 50) {
-                        st.price = Math.round(mgrRecommendedPrice / 50) * 50;
-                    }
-                    if (st.staffCount !== mgrRecommendedStaff) {
-                        st.staffCount = mgrRecommendedStaff;
-                    }
-                }
-                let displayPrice = mgrAutoMode && st.hasManager ? st.price : currentPrice;
+                let displayPrice = st.price || 1500;
 
                 let mgrModeToggle = (isPlayer && st.hasManager) ? `
                     <div style="display:flex;gap:6px;margin-bottom:10px;">
@@ -6179,15 +6436,34 @@
                         <button onclick="window.setStoreManagerMode('${st.id}', false)" style="flex:1;padding:6px;border-radius:8px;border:none;cursor:pointer;font-size:11px;font-weight:700;background:${!mgrAutoMode ? '#2563eb' : '#e2e8f0'};color:${!mgrAutoMode ? '#fff' : '#64748b'};">✋ 自分で設定</button>
                     </div>` : '';
 
-                let priceUI = isPlayer ? `<div style="background:#f9fafb; border-radius:8px; padding:12px; margin-bottom:15px;">
+                let priceUI = isPlayer ? (() => {
+                    // 損益分岐計算
+                    let _customers = Math.max(1, (st.contestedTraffic || 0) + (st.regulars || 0));
+                    let _rentWeekly = st.rent || 0;
+                    let _hrWeekly = 50000 * (st.staffCount || 1) + (st.hasManager && st.managerData ? st.managerData.baseSalary : 0);
+                    let _rd = roasterDefs.find(r => r.id === (c.roasterEquip || {}).id) || roasterDefs[0];
+                    let _cogsRate = Math.max(0.10, 0.28 - (_rd.tier || 0) * 0.02);
+                    let _fixedPerCustomer = (_rentWeekly + _hrWeekly) / _customers;
+                    let _breakEven = Math.ceil(_fixedPerCustomer / (1 - _cogsRate));
+                    let _breakEven50 = Math.ceil(_breakEven / 50) * 50; // 50円単位に切り上げ
+                    let _marginPct = displayPrice > 0 ? Math.floor((1 - _cogsRate - _fixedPerCustomer / displayPrice) * 100) : 0;
+                    let _marginColor = _marginPct >= 20 ? '#10b981' : _marginPct >= 0 ? '#f59e0b' : '#ef4444';
+                    let _breakPct = Math.min(100, Math.max(0, (_breakEven50 / 3000) * 100));
+
+                    return `<div style="background:#f9fafb; border-radius:8px; padding:12px; margin-bottom:15px;">
                     <div class="flex-between" style="margin-bottom:8px;">
                         <span style="font-size:13px; font-weight:700; color:var(--text-mut);">💴 おひとり様平均価格</span>
                         <span style="font-size:16px; font-weight:900; color:var(--primary);" id="price-val-${st.id}">¥${displayPrice.toLocaleString()}</span>
                     </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;padding:4px 8px;background:${_marginPct < 0 ? '#fef2f2' : '#f0fdf4'};border:1px solid ${_marginPct < 0 ? '#fecaca' : '#bbf7d0'};border-radius:6px;font-size:10px;">
+                        <span>💀 赤字ライン: <b style="color:#ef4444;">¥${_breakEven50.toLocaleString()}</b></span>
+                        <span>利益率: <b style="color:${_marginColor};font-size:12px;">${_marginPct}%</b></span>
+                    </div>
                     ${mgrModeToggle}
                     ${mgrAutoMode && st.hasManager
-                        ? `<div style="font-size:11px;color:#2563eb;background:#eff6ff;padding:6px 10px;border-radius:6px;border:1px solid #bfdbfe;">🤖 店長が最適値を自動設定中（価格: ¥${st.price?.toLocaleString()} / バイト: ${mgrRecommendedStaff}人）</div>`
-                        : `<div style="display:flex;align-items:center;gap:8px;margin:8px 0 4px;">
+                        ? `<div style="font-size:11px;color:#2563eb;background:#eff6ff;padding:6px 10px;border-radius:6px;border:1px solid #bfdbfe;">🤖 店長が診断ベースで自動経営中（運営★${st.managerData?.stats?.[1] || 1}）</div>`
+                        : `<div style="position:relative;margin:8px 0 4px;">
+                               <div style="display:flex;align-items:center;gap:8px;">
                                <input type="range" min="300" max="3000" step="50" value="${displayPrice}"
                                    style="flex:1;touch-action:none;"
                                    oninput="this.nextElementSibling.value=this.value;document.getElementById('price-val-${st.id}').innerText='¥'+parseInt(this.value).toLocaleString();"
@@ -6196,11 +6472,17 @@
                                    style="width:80px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-weight:900;text-align:right;"
                                    oninput="let v=Math.max(300,Math.min(3000,parseInt(this.value)||300));this.previousElementSibling.value=v;document.getElementById('price-val-${st.id}').innerText='¥'+v.toLocaleString();"
                                    onchange="updateStorePrice('${st.id}',Math.max(300,Math.min(3000,parseInt(this.value)||300)))">
+                               </div>
+                               <div style="position:relative;height:2px;margin-top:-14px;pointer-events:none;">
+                                   <div style="position:absolute;left:${_breakPct}%;top:-4px;width:2px;height:10px;background:#ef4444;"></div>
+                                   <div style="position:absolute;left:${Math.max(0, _breakPct - 3)}%;top:8px;font-size:8px;color:#ef4444;font-weight:900;white-space:nowrap;">¥${_breakEven50.toLocaleString()}</div>
+                               </div>
                            </div>
-                           <div class="flex-between" style="font-size:10px; color:var(--text-mut); margin-top:2px;"><span>最低(¥300)</span><span>最高(¥3,000)</span></div>`
+                           <div class="flex-between" style="font-size:10px; color:var(--text-mut); margin-top:8px;"><span>最低(¥300)</span><span>最高(¥3,000)</span></div>`
                     }
                     ${staffUI}
-                </div>` : `<div style="background:#f9fafb; border-radius:8px; padding:12px; margin-bottom:15px;"><div class="flex-between"><span style="font-size:12px; font-weight:bold; color:var(--text-mut);">設定価格</span><span style="font-size:16px; font-weight:900;">¥${currentPrice.toLocaleString()}</span></div>${staffUI}</div>`;
+                </div>`;
+                })() : `<div style="background:#f9fafb; border-radius:8px; padding:12px; margin-bottom:15px;"><div class="flex-between"><span style="font-size:12px; font-weight:bold; color:var(--text-mut);">設定価格</span><span style="font-size:16px; font-weight:900;">¥${currentPrice.toLocaleString()}</span></div>${staffUI}</div>`;
 
                 let storeAge = week - (st._openWeek || 1);
                 let repairAge = Math.max(0, storeAge - 52);
@@ -6258,6 +6540,38 @@
                             + '<div style="font-size:10px;color:var(--text-mut);margin-top:4px;">' + satMsg + '</div>'
                             + '</div>';
                     })()}
+                    ${(() => {
+                        if (!isPlayer || !st._diag) return '';
+                        let d = st._diag;
+                        let mkBar = (label, icon, score) => {
+                            let c = score >= 70 ? '#22c55e' : score >= 40 ? '#f59e0b' : '#ef4444';
+                            return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;">
+                                <span style="font-size:11px;width:56px;font-weight:700;color:var(--text-mut);">${icon} ${label}</span>
+                                <div style="flex:1;height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;">
+                                    <div style="width:${score}%;height:100%;background:${c};border-radius:4px;transition:width 0.3s;"></div>
+                                </div>
+                                <span style="font-size:10px;font-weight:900;color:${c};width:28px;text-align:right;">${score}</span>
+                            </div>`;
+                        };
+                        let bnHtml = d.bottlenecks.length > 0
+                            ? `<div style="margin-top:6px;padding:5px 8px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;font-size:10px;color:#b91c1c;font-weight:700;">⚠️ ${d.bottlenecks.join(' / ')}</div>`
+                            : `<div style="margin-top:6px;padding:5px 8px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;font-size:10px;color:#166534;font-weight:700;">✅ 問題なし</div>`;
+                        let rivalBtn = d.areaRivals.length > 0
+                            ? `<button onclick="showAreaComparison('${st.id}')" style="width:100%;margin-top:6px;padding:6px;background:transparent;border:1px dashed #94a3b8;border-radius:6px;font-size:10px;font-weight:700;color:#64748b;cursor:pointer;">🔍 エリア内競合と比較（${d.areaRivals.length}社）→ シェア${d.myShare}%</button>`
+                            : '';
+                        return `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:12px;">
+                            <div style="font-size:11px;font-weight:800;color:#475569;margin-bottom:8px;">📊 店舗診断</div>
+                            ${mkBar('集客', '📣', d.attract)}
+                            ${mkBar('価格', '💴', d.price)}
+                            ${mkBar('対応力', '👥', d.capacity)}
+                            ${mkBar('競合', '⚔️', d.competitive)}
+                            ${mkBar('収益', '💰', d.profit)}
+                            ${mkBar('メニュー', '☕', d.menu)}
+                            ${mkBar('知名度', '📢', d.brand)}
+                            ${bnHtml}
+                            ${rivalBtn}
+                        </div>`;
+                    })()}
                     <div style="font-size:13px; line-height:1.8; color:var(--text-mut); margin-bottom:15px; flex:1;">
                         <div class="flex-between"><span>👥 来客数 (常連含む):</span><b style="color:var(--text-main);">${((st.contestedTraffic || 0) + (st.regulars || 0)).toLocaleString()}人</b></div>
                         <div class="flex-between"><span>📈 週間売上:</span><b style="color:var(--text-main);">¥${(st.sales || 0).toLocaleString()}</b></div>
@@ -6289,6 +6603,110 @@
         };
         // 💰 価格変更処理（プロフィット・オプティマイザー）
         // 💰 価格変更処理（プロフィット・オプティマイザー）
+
+        // 🔍 エリア内競合比較モーダル
+        window.showAreaComparison = function (storeId) {
+            let p = companies[0];
+            let st = p.stores.find(s => String(s.id) === String(storeId));
+            if (!st || !st._diag) return;
+            let d = st._diag;
+            let _stCountry = ({'TOKYO':'JP','OSAKA':'JP','USA':'USA','CHINA':'CHINA','UK':'UK','KOREA':'KOREA','AUSTRALIA':'AUS','CANADA':'CAN','FRANCE':'FRA','GERMANY':'GER','INDIA':'IND'})[st.regionKey] || 'JP';
+            let myData = {
+                name: '👑 ' + st.name,
+                appeal: st._appeal || 0,
+                price: st.price || 1500,
+                share: d.myShare,
+                customers: (st.contestedTraffic || 0) + (st.regulars || 0),
+                satisfaction: st.satisfaction || 0,
+                menuCount: (p.unlockedMenus || []).length,
+                brandAware: (p.brandAwareness || {})[_stCountry] || 0,
+                isPlayer: true
+            };
+            let allStores = [myData, ...d.areaRivals];
+            allStores.sort((a, b) => b.share - a.share);
+            let maxAppeal = Math.max(...allStores.map(s => s.appeal), 1);
+
+            let rowsHtml = allStores.map(s => {
+                let bg = s.isPlayer ? '#eff6ff' : '#fff';
+                let border = s.isPlayer ? '2px solid #3b82f6' : '1px solid #e2e8f0';
+                let shareColor = s.share >= 40 ? '#22c55e' : s.share >= 20 ? '#f59e0b' : '#ef4444';
+                let satColor = s.satisfaction >= 70 ? '#22c55e' : s.satisfaction >= 50 ? '#f59e0b' : '#ef4444';
+                let appealPct = Math.floor((s.appeal / maxAppeal) * 100);
+                let menuColor = s.menuCount >= 8 ? '#22c55e' : s.menuCount >= 4 ? '#f59e0b' : '#ef4444';
+                let brandColor = s.brandAware >= 50 ? '#22c55e' : s.brandAware >= 20 ? '#f59e0b' : '#ef4444';
+                return `<div style="background:${bg};border:${border};border-radius:10px;padding:12px;margin-bottom:8px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <span style="font-size:13px;font-weight:900;${s.isPlayer ? 'color:#2563eb;' : ''}">${s.name.substring(0, 16)}</span>
+                        <span style="font-size:16px;font-weight:900;color:${shareColor};">${s.share}%</span>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:11px;margin-bottom:6px;">
+                        <div style="text-align:center;">
+                            <div style="color:#94a3b8;font-weight:600;">価格</div>
+                            <div style="font-weight:900;font-size:13px;">¥${s.price.toLocaleString()}</div>
+                        </div>
+                        <div style="text-align:center;">
+                            <div style="color:#94a3b8;font-weight:600;">客数/週</div>
+                            <div style="font-weight:900;font-size:13px;">${s.customers.toLocaleString()}</div>
+                        </div>
+                        <div style="text-align:center;">
+                            <div style="color:#94a3b8;font-weight:600;">満足度</div>
+                            <div style="font-weight:900;font-size:13px;color:${satColor};">${s.satisfaction}</div>
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px;margin-bottom:6px;">
+                        <div style="text-align:center;background:#f8fafc;border-radius:6px;padding:4px;">
+                            <div style="color:#94a3b8;font-weight:600;">☕ メニュー</div>
+                            <div style="font-weight:900;color:${menuColor};">${s.menuCount}品</div>
+                        </div>
+                        <div style="text-align:center;background:#f8fafc;border-radius:6px;padding:4px;">
+                            <div style="color:#94a3b8;font-weight:600;">📢 知名度</div>
+                            <div style="font-weight:900;color:${brandColor};">${Math.floor(s.brandAware)}%</div>
+                        </div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:4px;font-size:10px;color:#94a3b8;">
+                        <span>魅力</span>
+                        <div style="flex:1;height:5px;background:#e2e8f0;border-radius:3px;overflow:hidden;">
+                            <div style="width:${appealPct}%;height:100%;background:${s.isPlayer ? '#3b82f6' : '#94a3b8'};border-radius:3px;"></div>
+                        </div>
+                        <span style="font-weight:700;">${s.appeal}</span>
+                    </div>
+                </div>`;
+            }).join('');
+
+            let avgPrice = allStores.length > 0 ? Math.floor(allStores.reduce((s, x) => s + x.price, 0) / allStores.length) : 0;
+            let myPriceDiff = (st.price || 1500) - d.areaAvgPrice;
+            let priceTip = myPriceDiff > 200 ? '💡 競合平均より高め。満足度・知名度が十分か確認を。'
+                : myPriceDiff < -200 ? '💡 競合平均より安め。値上げの余地あり。'
+                : '✅ 競合と近い価格帯。';
+
+            let modalId = 'area-compare-modal';
+            let ex = document.getElementById(modalId); if (ex) ex.remove();
+            let div = document.createElement('div');
+            div.id = modalId;
+            div.className = 'modal-overlay';
+            div.style.cssText = 'display:flex;z-index:10000;';
+            div.innerHTML = `
+                <div class="modal-content" style="max-width:480px;max-height:90vh;overflow-y:auto;padding:20px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                        <div>
+                            <h3 style="margin:0;font-size:16px;">🔍 エリア競合分析</h3>
+                            <div style="font-size:11px;color:#94a3b8;margin-top:2px;">📍 ${st.location || ''} — ${allStores.length}社が出店中</div>
+                        </div>
+                        <button onclick="document.getElementById('${modalId}').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;">✕</button>
+                    </div>
+                    <div style="background:#f1f5f9;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:11px;">
+                        <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+                            <span>エリア平均価格</span><b>¥${d.areaAvgPrice.toLocaleString()}</b>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;">
+                            <span>自店との価格差</span><b style="color:${myPriceDiff > 0 ? '#ef4444' : '#22c55e'};">${myPriceDiff > 0 ? '+' : ''}¥${myPriceDiff.toLocaleString()}</b>
+                        </div>
+                        <div style="margin-top:6px;color:#475569;font-weight:600;">${priceTip}</div>
+                    </div>
+                    ${rowsHtml}
+                </div>`;
+            document.getElementById('modals-area').appendChild(div);
+        };
         window.updateStorePrice = function (storeId, newPrice) {
             let p = companies[0];
             let st = p.stores.find(s => String(s.id) === String(storeId));
@@ -6320,9 +6738,11 @@
         window.currentRndCategory = 'drink';
 
         window.updateHQView = function () {
+            let _hqScrollY = window.scrollY;
             let container = document.getElementById('view-hq'); if (!container) return;
             if (!window.playerHQ) {
                 container.innerHTML = `<div class="flex-between" style="margin-bottom: 24px; border-bottom: 3px solid var(--primary); padding-bottom: 12px;"><h2 style="margin:0;"><span style="font-size:24px;">🏢</span> 本社・人事・R&D</h2></div><div class="card" style="text-align: center; padding: 60px 20px; max-width: 600px; margin: 0 auto;"><div style="font-size: 64px; margin-bottom: 20px;">🏢</div><h3>グローバル本社の設立</h3><p style="color: var(--text-mut); line-height:1.6; margin-bottom:30px;">役員の雇用や商品開発（R&D）を行うには、<br>マップ上のビルを取得・または賃貸して本社を構える必要があります。</p><button class="btn-primary btn-large" style="max-width: 300px; margin: 0 auto;" onclick="openHQRelocateModal()">本社用のビルを探す</button></div>`;
+                requestAnimationFrame(() => window.scrollTo(0, _hqScrollY));
                 return;
             }
             hqLevel = hqLevel || 1; let c = companies[0], baseCost = [1000000, 3000000, 6000000, 10000000, 20000000][hqLevel - 1] || 1000000;
@@ -6350,7 +6770,8 @@
                 { id: 'food', icon: '🥪', name: 'フード' },
                 { id: 'legend', icon: '💎', name: '伝説級' },
                 { id: 'tech', icon: '🛠️', name: '設備投資' },
-                { id: 'rival', icon: '🔍', name: '競合分析' }
+                { id: 'rival', icon: '🔍', name: '競合分析' },
+                { id: 'ad', icon: '📣', name: '広告' }
             ];
             let rndTabs = cats.map(cat => `<button class="tab-btn ${window.currentRndCategory === cat.id ? 'active' : ''}" onclick="window.currentRndCategory='${cat.id}'; updateHQView();">${cat.icon} ${cat.name}</button>`).join('');
 
@@ -6365,12 +6786,37 @@
             let rndListHtml = '';
             if (window.currentRndCategory === 'rival') {
                 // 競合メニュー分析
+                if (!window._rivalFilter) window._rivalFilter = 'ALL';
+                if (!window._rivalSort) window._rivalSort = 'bonus';
                 let rivalCos = companies.filter(cx => cx.sector === 'coffee' && cx.id !== 'player' && !cx.isBankrupt && cx.unlockedMenus && cx.unlockedMenus.length > 0);
+                // 国フィルター
+                let _rivalCountries = [...new Set(rivalCos.map(r => r.country || 'JP'))];
+                if (window._rivalFilter !== 'ALL') rivalCos = rivalCos.filter(r => (r.country || 'JP') === window._rivalFilter);
+                // ソート
+                rivalCos.forEach(rx => { rx._totalBonus = calcUnlockedBonus(rx, (roasterDefs.find(r => r.id === (rx.roasterEquip || {}).id) || roasterDefs[0]).drinkStar); rx._menuCount = (rx.unlockedMenus || []).length; rx._avgStars = rx._menuCount > 0 ? (rx.unlockedMenus.reduce((s, m) => s + ((rx.menuStars || {})[m] || 1), 0) / rx._menuCount) : 1; });
+                if (window._rivalSort === 'bonus') rivalCos.sort((a, b) => b._totalBonus - a._totalBonus);
+                else if (window._rivalSort === 'menu') rivalCos.sort((a, b) => b._menuCount - a._menuCount);
+                else if (window._rivalSort === 'stars') rivalCos.sort((a, b) => b._avgStars - a._avgStars);
+
+                let _cFlags = {'JP':'🇯🇵','USA':'🇺🇸','CHINA':'🇨🇳','UK':'🇬🇧','KOREA':'🇰🇷','AUS':'🇦🇺','CAN':'🇨🇦','FRA':'🇫🇷','GER':'🇩🇪','IND':'🇮🇳'};
+                let filterBtns = `<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;">
+                    <button onclick="window._rivalFilter='ALL';updateHQView();" style="padding:4px 10px;border-radius:20px;border:none;cursor:pointer;font-size:10px;font-weight:700;background:${window._rivalFilter==='ALL'?'#1e293b':'#f1f5f9'};color:${window._rivalFilter==='ALL'?'#fff':'#64748b'};">全て</button>
+                    ${_rivalCountries.map(cc => `<button onclick="window._rivalFilter='${cc}';updateHQView();" style="padding:4px 10px;border-radius:20px;border:none;cursor:pointer;font-size:10px;font-weight:700;background:${window._rivalFilter===cc?'#1e293b':'#f1f5f9'};color:${window._rivalFilter===cc?'#fff':'#64748b'};">${_cFlags[cc]||cc} ${cc}</button>`).join('')}
+                </div>`;
+                let sortBtns = `<div style="display:flex;gap:4px;margin-bottom:10px;">
+                    <button onclick="window._rivalSort='bonus';updateHQView();" style="padding:4px 10px;border-radius:20px;border:none;cursor:pointer;font-size:10px;font-weight:700;background:${window._rivalSort==='bonus'?'var(--primary)':'#f1f5f9'};color:${window._rivalSort==='bonus'?'#fff':'#64748b'};">バフ順</button>
+                    <button onclick="window._rivalSort='menu';updateHQView();" style="padding:4px 10px;border-radius:20px;border:none;cursor:pointer;font-size:10px;font-weight:700;background:${window._rivalSort==='menu'?'var(--primary)':'#f1f5f9'};color:${window._rivalSort==='menu'?'#fff':'#64748b'};">メニュー数順</button>
+                    <button onclick="window._rivalSort='stars';updateHQView();" style="padding:4px 10px;border-radius:20px;border:none;cursor:pointer;font-size:10px;font-weight:700;background:${window._rivalSort==='stars'?'var(--primary)':'#f1f5f9'};color:${window._rivalSort==='stars'?'#fff':'#64748b'};">平均★順</button>
+                </div>`;
+
                 if (rivalCos.length === 0) {
-                    rndListHtml = '<div style="padding:40px;text-align:center;color:var(--text-mut);">競合他社のデータがありません。</div>';
+                    rndListHtml = filterBtns + sortBtns + '<div style="padding:40px;text-align:center;color:var(--text-mut);">該当する競合がありません。</div>';
                 } else {
                     let rivalHtml = rivalCos.map(rx => {
-                        let totalBonus = calcUnlockedBonus(rx, (roasterDefs.find(r => r.id === (rx.roasterEquip || {}).id) || roasterDefs[0]).drinkStar).toFixed(2);
+                        let totalBonus = rx._totalBonus.toFixed(2);
+                        let isSub = rx.parent === 'player';
+                        let subBadge = isSub ? '<span style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:900;padding:2px 6px;border-radius:8px;margin-left:4px;">👑傘下</span>' : '';
+                        let countryBadge = `<span style="font-size:10px;margin-right:4px;">${_cFlags[rx.country]||''}</span>`;
                         let menuRows = (rx.unlockedMenus || []).map(mid => {
                             let mData = coffeeMenus.find(m => m.id === mid); if (!mData) return '';
                             let stars = (rx.menuStars || {})[mid] || 1;
@@ -6383,17 +6829,15 @@
                                 + '<span style="font-size:11px;color:var(--text-mut);">×' + getMenuBonus(mData, stars).toFixed(2) + '</span>'
                                 + '</div>';
                         }).join('');
-                        let avgStarsR = rx.unlockedMenus.length > 0
-                            ? (rx.unlockedMenus.reduce((s, m) => (s + (rx.menuStars || {})[m] || 1), 0) / rx.unlockedMenus.length).toFixed(1) : '1.0';
                         return '<div style="padding:14px;border-bottom:2px solid var(--border);">'
                             + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
-                            + '<span style="font-weight:900;font-size:15px;">' + rx.name.replace(/\[.*?\]\s*/, '') + '</span>'
-                            + '<span style="background:var(--primary);color:#fff;font-size:11px;padding:3px 10px;border-radius:10px;">メニューバフ ×' + totalBonus + ' | 平均★' + avgStarsR + '</span>'
+                            + '<span style="font-weight:900;font-size:15px;">' + countryBadge + rx.name.replace(/\[.*?\]\s*/, '') + subBadge + '</span>'
+                            + '<span style="background:var(--primary);color:#fff;font-size:11px;padding:3px 10px;border-radius:10px;">×' + totalBonus + ' | ★' + rx._avgStars.toFixed(1) + ' | ' + rx._menuCount + '品</span>'
                             + '</div>'
                             + menuRows
                             + '</div>';
                     }).join('');
-                    rndListHtml = '<div style="max-height:450px;overflow-y:auto;">' + rivalHtml + '</div>';
+                    rndListHtml = filterBtns + sortBtns + '<div style="max-height:450px;overflow-y:auto;">' + rivalHtml + '</div>';
                 }
             } else if (window.currentRndCategory === 'tech') {
                 // 技術開発UIを3サブタブで表示
@@ -6498,11 +6942,16 @@
                 }).join('') + '</div>';
             }
 
+            // 📣 広告タブ: ad-section-rootを配置、renderAdSectionが描画
+            if (window.currentRndCategory === 'ad') {
+                rndListHtml = '<div id="ad-section-root" style="min-height:200px;padding:20px;text-align:center;color:var(--text-mut);">広告セクション読み込み中...</div>';
+            }
+
             let _savedScrollHQ = container.scrollTop;
             let _savedPageY = window.scrollY;
-            container.innerHTML = `<div class="flex-between" style="margin-bottom: 24px; border-bottom: 3px solid var(--primary); padding-bottom: 12px;"><h2 style="margin:0;"><span style="font-size:24px;">🏢</span> 本社・人事・R&D</h2></div><div class="card" style="background: var(--side); color: white; border:none;"><div class="flex-between" style="flex-wrap: wrap; gap: 15px;"><div><div style="display:flex; align-items:center; gap:12px; margin-bottom: 10px;"><span style="background: var(--gold); color: white; padding: 4px 12px; border-radius: 15px; font-weight: 900; font-size: 14px;">Level ${hqLevel}</span><span style="font-size: 20px; font-weight: 900; letter-spacing:1px;">Global Headquarters</span></div><div style="font-size: 13px; color: #94a3b8; display:flex; gap:15px; flex-wrap:wrap;"><span>📍 所在地: <b style="color:#fff;">${window.playerHQ.regionName} - ${window.playerHQ.distName}</b></span><span>💸 維持費: ${(baseCost / 10000).toLocaleString()}万円/週</span><span>👔 雇用枠: ${(hiredExecs || []).length} / ${hqLevel} 人</span></div></div><div style="display:flex; gap:10px;"><button class="btn-outline" style="background:rgba(255,255,255,0.1); color:#fff; border:none;" onclick="openHQRelocateModal()">移転</button><button class="btn-primary" style="background:var(--gold); box-shadow:0 4px 10px rgba(217,119,6,0.4);" onclick="upgradeHQ()">⭐ 設備拡張</button></div></div></div><h3 style="border-bottom: 2px solid var(--border); padding-bottom: 10px; margin-top:30px;">👔 役員人事 (タレント・マトリックス)</h3><div class="grid-4" style="margin-bottom:30px;">${execListHtml}</div><h3 style="border-bottom: 2px solid var(--border); padding-bottom: 10px; margin-top:30px;">💡 イノベーション・ハブ・ラボ (全60種 R&D)</h3><div class="region-tabs">${rndTabs}</div><div class="card" style="padding:0; border-radius:12px; overflow:hidden;"><div style="max-height: 400px; overflow-y: auto;">${rndListHtml}</div></div>`;
-            // スクロール位置を復元（再描画後に即時セット）
-            requestAnimationFrame(() => { container.scrollTop = _savedScrollHQ; window.scrollTo(0, _savedPageY); });
+            container.innerHTML = `<div class="flex-between" style="margin-bottom: 24px; border-bottom: 3px solid var(--primary); padding-bottom: 12px;"><h2 style="margin:0;"><span style="font-size:24px;">🏢</span> 本社・人事・R&D</h2></div><div class="card" style="background: var(--side); color: white; border:none;"><div class="flex-between" style="flex-wrap: wrap; gap: 15px;"><div><div style="display:flex; align-items:center; gap:12px; margin-bottom: 10px;"><span style="background: var(--gold); color: white; padding: 4px 12px; border-radius: 15px; font-weight: 900; font-size: 14px;">Level ${hqLevel}</span><span style="font-size: 20px; font-weight: 900; letter-spacing:1px;">Global Headquarters</span></div><div style="font-size: 13px; color: #94a3b8; display:flex; gap:15px; flex-wrap:wrap;"><span>📍 所在地: <b style="color:#fff;">${window.playerHQ.regionName} - ${window.playerHQ.distName}</b></span><span>💸 維持費: ${(baseCost / 10000).toLocaleString()}万円/週</span><span>👔 雇用枠: ${(hiredExecs || []).length} / ${hqLevel} 人</span></div></div><div style="display:flex; gap:10px;"><button class="btn-outline" style="background:rgba(255,255,255,0.1); color:#fff; border:none;" onclick="openHQRelocateModal()">移転</button><button class="btn-primary" style="background:var(--gold); box-shadow:0 4px 10px rgba(217,119,6,0.4);" onclick="upgradeHQ()">⭐ 設備拡張</button></div></div></div><h3 style="border-bottom: 2px solid var(--border); padding-bottom: 10px; margin-top:30px;">👔 役員人事 (タレント・マトリックス)</h3><div class="grid-4" style="margin-bottom:30px;">${execListHtml}</div><div id="hq-infra-placeholder"></div><h3 style="border-bottom: 2px solid var(--border); padding-bottom: 10px; margin-top:30px;">💡 イノベーション・ハブ・ラボ</h3><div class="region-tabs">${rndTabs}</div><div class="card" style="padding:0; border-radius:12px; overflow:hidden;"><div style="max-height: 500px; overflow-y: auto;">${rndListHtml}</div></div>`;
+            // スクロール位置を復元
+            requestAnimationFrame(() => window.scrollTo(0, _hqScrollY));
         };
 
         // ==========================================
@@ -6993,11 +7442,16 @@ ${ds.desc}`)) {
                     btn.onclick = () => {
                         Array.from(selector.children).forEach(b => b.classList.remove('active'));
                         btn.classList.add('active');
+                        window._lastPropertyRegion = key;
                         displayDistricts(key);
                     };
                     selector.appendChild(btn);
                 });
-                selector.children[0].classList.add('active');
+                // 前回選択した地域を復元、なければ最初
+                let _targetKey = window._lastPropertyRegion || Object.keys(globalNetworkData)[0];
+                let _targetBtn = Array.from(selector.children).find(b => b.dataset.rk === _targetKey) || selector.children[0];
+                _targetBtn.classList.add('active');
+                displayDistricts(_targetKey);
             }
         };
 
@@ -7359,6 +7813,64 @@ ${ds.desc}`)) {
             addLog(`【不動産】${distName} の売り出しを取り下げました。`, 'normal', '不動産');
             updateDashboard();
         };
+        // 🔧 修繕必要店舗パネル
+        window.openMaintenancePanel = function () {
+            let p = companies[0];
+            let needRepair = p.stores.map(st => {
+                let age = week - (st._openWeek || 1);
+                let repairAge = Math.max(0, age - 52);
+                let repairRate = Math.min(0.40, Math.floor(repairAge / 8) * 0.05);
+                let repairCost = Math.floor((st.rent || 0) * repairRate);
+                let renewCost = Math.floor((st.rent || 0) * 2);
+                return { st, repairRate, repairCost, renewCost, age };
+            }).filter(x => x.repairRate > 0).sort((a, b) => b.repairRate - a.repairRate);
+
+            let modalId = 'maintenance-panel-modal';
+            let ex = document.getElementById(modalId); if (ex) ex.remove();
+            let rowsHtml = '';
+            if (needRepair.length === 0) {
+                rowsHtml = '<div style="text-align:center;padding:40px;color:#10b981;font-weight:900;font-size:14px;">✅ 全店舗良好 — 修繕が必要な店舗はありません</div>';
+            } else {
+                rowsHtml = needRepair.map(x => {
+                    let barColor = x.repairRate >= 0.25 ? '#ef4444' : x.repairRate >= 0.15 ? '#f59e0b' : '#94a3b8';
+                    let canAfford = p.cash >= x.renewCost;
+                    return `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:8px;border-left:4px solid ${barColor};">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                            <div>
+                                <div style="font-weight:900;font-size:13px;">${x.st.name}</div>
+                                <div style="font-size:10px;color:#64748b;">築${x.age}週 | 修繕費 +${Math.round(x.repairRate * 100)}% (¥${Math.floor(x.repairCost / 10000).toLocaleString()}万/週)</div>
+                            </div>
+                            <div style="text-align:right;">
+                                <div style="font-size:16px;font-weight:900;color:${barColor};">+${Math.round(x.repairRate * 100)}%</div>
+                            </div>
+                        </div>
+                        <div style="width:100%;height:6px;background:#e2e8f0;border-radius:3px;overflow:hidden;margin-bottom:8px;">
+                            <div style="width:${Math.min(100, x.repairRate / 0.40 * 100)}%;height:100%;background:${barColor};border-radius:3px;"></div>
+                        </div>
+                        <button onclick="renewStore('${x.st.id}');closeModal('${modalId}');setTimeout(openMaintenancePanel,200);"
+                            style="width:100%;padding:8px;border:none;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700;
+                            background:${canAfford ? '#3b82f6' : '#e2e8f0'};color:${canAfford ? '#fff' : '#94a3b8'};"
+                            ${canAfford ? '' : 'disabled'}>
+                            🔄 リニューアル (¥${Math.floor(x.renewCost / 10000).toLocaleString()}万)
+                        </button>
+                    </div>`;
+                }).join('');
+            }
+            let totalWeeklyCost = needRepair.reduce((s, x) => s + x.repairCost, 0);
+            document.getElementById('modals-area').insertAdjacentHTML('beforeend', `
+                <div id="${modalId}" class="modal-overlay" style="display:flex;z-index:10000;">
+                    <div class="modal-content" style="max-width:460px;max-height:85vh;overflow-y:auto;padding:20px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                            <div>
+                                <h3 style="margin:0;font-size:16px;">🔧 修繕が必要な店舗</h3>
+                                <div style="font-size:11px;color:#94a3b8;">${needRepair.length}店舗 | 週間修繕費合計: ¥${Math.floor(totalWeeklyCost / 10000).toLocaleString()}万</div>
+                            </div>
+                            <button onclick="closeModal('${modalId}')" style="background:none;border:none;font-size:20px;cursor:pointer;">✕</button>
+                        </div>
+                        ${rowsHtml}
+                    </div>
+                </div>`);
+        };
         window.closeStore = function (storeId) {
             const p = companies[0]; const idx = p.stores.findIndex(s => s.id === storeId); if (idx === -1) return;
             const st = p.stores[idx]; const pen = st.rent * 2;
@@ -7395,6 +7907,171 @@ ${ds.desc}`)) {
             let container = document.getElementById('view-company');
             if (!container) return;
             let p = companies[0], cfo = hiredExecs.find(e => e.role === 'CFO');
+            if (!window._finTab) window._finTab = 'pl';
+
+            // タブ切り替えUI
+            let tabs = [
+                { id: 'pl', icon: '📋', name: '決算' },
+                { id: 'portfolio', icon: '💼', name: '資産' },
+                { id: 'bank', icon: '🏦', name: '銀行' },
+                { id: 'policy', icon: '⚙️', name: '方針' }
+            ];
+            let tabHtml = `<div style="display:flex;gap:4px;margin-bottom:20px;background:#1e293b;border-radius:12px;padding:4px;border:1px solid #334155;">` +
+                tabs.map(t => `<button onclick="window._finTab='${t.id}';renderPortfolio();" style="flex:1;padding:10px 6px;border:none;border-radius:10px;cursor:pointer;font-size:12px;font-weight:800;background:${window._finTab === t.id ? 'var(--primary)' : 'transparent'};color:${window._finTab === t.id ? '#fff' : '#94a3b8'};box-shadow:${window._finTab === t.id ? '0 2px 8px rgba(37,99,235,0.4)' : 'none'};transition:all 0.2s;">${t.icon} ${t.name}</button>`).join('') +
+                `</div>`;
+
+            let bodyHtml = '';
+
+            // ═══ タブ1: 決算ポータル ═══
+            if (window._finTab === 'pl') {
+                let wk = p._plWeekly || [];
+                let qr = p._plQuarterly || [];
+                let cur = wk.length > 0 ? wk[wk.length - 1] : null;
+                let prev = wk.length > 1 ? wk[wk.length - 2] : null;
+                let f = (v) => { if (v == null || isNaN(v)) return '0'; return v >= 1e8 ? (v / 1e8).toFixed(1) + '億' : v >= 1e4 ? Math.floor(v / 1e4).toLocaleString() + '万' : v.toLocaleString(); };
+                let chg = (a, b) => {
+                    if (!b || b === 0 || a == null || isNaN(a)) return '';
+                    let d = ((a / b - 1) * 100).toFixed(0);
+                    let c = d >= 0 ? '#10b981' : '#ef4444';
+                    return `<span style="font-size:10px;color:${c};font-weight:700;">${d >= 0 ? '+' : ''}${d}%</span>`;
+                };
+
+                // ヘッダー: 総売上・純利益
+                let headerHtml = '';
+                // 時価総額の前年比（両ブロックで使うのでスコープ外に）
+                let _mcYoY = '';
+                if (cur) {
+                    if (wk.length >= 2) {
+                        let _oldWeekIdx = wk.findIndex(w => w.w <= week - 48);
+                        let _oldMC = _oldWeekIdx >= 0 ? wk[_oldWeekIdx].mc : wk[0].mc;
+                        if (_oldMC > 0) {
+                            let _yoyPct = ((cur.mc / _oldMC - 1) * 100).toFixed(0);
+                            let _yoyC = _yoyPct >= 0 ? '#4ade80' : '#f87171';
+                            _mcYoY = `<div style="font-size:9px;color:${_yoyC};font-weight:700;">${_yoyPct >= 0 ? '+' : ''}${_yoyPct}% vs前年</div>`;
+                        }
+                    }
+
+                    headerHtml = `
+                    <div style="background:linear-gradient(135deg,#0f172a,#1e293b);border-radius:14px;padding:20px;margin-bottom:16px;color:#fff;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+                            <div style="text-align:center;padding:12px;background:rgba(255,255,255,0.05);border-radius:10px;">
+                                <div style="font-size:11px;color:#94a3b8;font-weight:700;margin-bottom:4px;">総売上高</div>
+                                <div style="font-size:24px;font-weight:900;line-height:1.2;">¥${f(cur.rev)}</div>
+                                <div style="margin-top:4px;">${prev ? chg(cur.rev, prev.rev) : ''} <span style="font-size:9px;color:#64748b;">vs前週</span></div>
+                            </div>
+                            <div style="text-align:center;padding:12px;background:rgba(255,255,255,0.05);border-radius:10px;">
+                                <div style="font-size:11px;color:#94a3b8;font-weight:700;margin-bottom:4px;">純利益</div>
+                                <div style="font-size:24px;font-weight:900;color:${cur.net >= 0 ? '#4ade80' : '#f87171'};line-height:1.2;">¥${f(cur.net)}</div>
+                                <div style="margin-top:4px;">${prev ? chg(cur.net, prev.net) : ''} <span style="font-size:9px;color:#64748b;">vs前週</span></div>
+                            </div>
+                        </div>
+                        ${qr.length > 1 ? `<div style="display:flex;align-items:flex-end;gap:4px;height:60px;justify-content:center;">
+                            ${qr.map((q, i) => {
+                                let maxRev = Math.max(...qr.map(x => Math.abs(x.rev)), 1);
+                                let h1 = Math.max(4, Math.floor(Math.abs(q.rev) / maxRev * 50));
+                                let maxNet = Math.max(...qr.map(x => Math.abs(x.net)), 1);
+                                let h2 = Math.max(4, Math.floor(Math.abs(q.net) / maxNet * 50));
+                                let yr = 2020 + Math.floor((q.w - 1) / 48);
+                                let qn = Math.floor(((q.w - 1) % 48) / 12) + 1;
+                                return `<div style="text-align:center;flex:1;">
+                                    <div style="display:flex;align-items:flex-end;justify-content:center;gap:2px;height:50px;">
+                                        <div style="width:10px;height:${h1}px;background:#3b82f6;border-radius:2px;"></div>
+                                        <div style="width:10px;height:${h2}px;background:${q.net >= 0 ? '#4ade80' : '#f87171'};border-radius:2px;"></div>
+                                    </div>
+                                    <div style="font-size:8px;color:#64748b;margin-top:2px;">${yr} Q${qn}</div>
+                                </div>`;
+                            }).join('')}
+                        </div>
+                        <div style="display:flex;justify-content:center;gap:12px;margin-top:4px;font-size:9px;color:#64748b;">
+                            <span><span style="display:inline-block;width:8px;height:8px;background:#3b82f6;border-radius:2px;"></span> 売上</span>
+                            <span><span style="display:inline-block;width:8px;height:8px;background:#4ade80;border-radius:2px;"></span> 利益</span>
+                        </div>` : ''}
+                    </div>`;
+                } else {
+                    headerHtml = `<div style="text-align:center;padding:40px;color:var(--text-mut);">1週以上経過すると決算データが表示されます。</div>`;
+                }
+
+                // P/L表（損益計算書）
+                let plHtml = '';
+                if (cur) {
+                    let row = (label, curV, prevV, indent) => {
+                        let style = indent ? 'padding-left:16px;color:#64748b;font-size:11px;' : 'font-weight:800;font-size:12px;';
+                        let isNeg = label.startsWith('-');
+                        return `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #f1f5f9;${style}">
+                            <span>${label}</span>
+                            <div style="display:flex;gap:12px;align-items:center;">
+                                ${prev ? `<span style="color:#94a3b8;font-size:10px;width:70px;text-align:right;">¥${f(prevV)}</span>` : ''}
+                                <span style="width:80px;text-align:right;color:${isNeg ? '#ef4444' : 'var(--text-main)'};font-weight:700;">¥${f(curV)}</span>
+                                <span style="width:36px;text-align:right;">${prev ? chg(curV, prevV) : ''}</span>
+                            </div>
+                        </div>`;
+                    };
+
+                    let storeRent = cur.exp - cur.cogs - cur.social - cur.util - cur.repair - cur.interest - cur.rent - cur.ctax - cur.ad - cur.infra;
+                    plHtml = `
+                    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:16px;">
+                        <div style="font-size:13px;font-weight:900;color:var(--text-main);margin-bottom:4px;">📋 損益計算書</div>
+                        <div style="display:flex;justify-content:flex-end;gap:12px;font-size:9px;color:#94a3b8;margin-bottom:8px;padding-right:36px;">
+                            ${prev ? '<span style="width:70px;text-align:right;">前週</span>' : ''}
+                            <span style="width:80px;text-align:right;">今週</span>
+                            <span style="width:36px;"></span>
+                        </div>
+                        <div style="border-top:2px solid var(--primary);padding-top:8px;">
+                            ${row('売上高', cur.rev, prev?.rev)}
+                            ${row('  コーヒー豆（原価）', cur.cogs, prev?.cogs, true)}
+                            ${row('  店舗家賃', storeRent > 0 ? storeRent : 0, prev ? (prev.exp - prev.cogs - prev.social - prev.util - prev.repair - prev.interest - prev.rent - prev.ctax - prev.ad - prev.infra) : 0, true)}
+                            ${row('  人件費', cur.hr > 0 ? cur.hr : 0, prev?.hr, true)}
+                            ${row('  社会保険料', cur.social, prev?.social, true)}
+                            ${row('  光熱費', cur.util, prev?.util, true)}
+                            ${cur.repair > 0 ? row('  修繕費', cur.repair, prev?.repair, true) : ''}
+                            ${cur.ad > 0 ? row('  広告費', cur.ad, prev?.ad, true) : ''}
+                            ${cur.infra > 0 ? row('  インフラ契約', cur.infra, prev?.infra, true) : ''}
+                            ${cur.rent > 0 ? row('  本社家賃', cur.rent, prev?.rent, true) : ''}
+                            ${cur.interest > 0 ? row('  借入利息', cur.interest, prev?.interest, true) : ''}
+                            ${row('  消費税', cur.ctax, prev?.ctax, true)}
+                            <div style="border-top:2px solid #1e293b;margin-top:4px;padding-top:4px;">
+                            ${row('費用合計', cur.exp, prev?.exp)}
+                            </div>
+                            <div style="border-top:1px dashed #94a3b8;margin-top:4px;padding-top:4px;">
+                            ${row('法人税', cur.tax, prev?.tax)}
+                            </div>
+                            ${cur.brand > 0 ? row('+ ブランドロイヤリティ', cur.brand, prev?.brand) : ''}
+                            ${cur.prop > 0 ? row('+ 不動産収益', cur.prop, prev?.prop) : ''}
+                            ${cur.div > 0 ? row('+ 受取配当金', cur.div, prev?.div) : ''}
+                            ${cur.stock > 0 ? row('+ 株売却益', cur.stock, prev?.stock) : ''}
+                            ${cur.siphon > 0 ? row('+ 子会社回収', cur.siphon, prev?.siphon) : ''}
+                            <div style="background:#f0fdf4;border:2px solid ${cur.net >= 0 ? '#22c55e' : '#ef4444'};border-radius:8px;padding:8px;margin-top:8px;">
+                            ${row('💰 純利益', cur.net, prev?.net)}
+                            </div>
+                        </div>
+                    </div>`;
+
+                    // KPI一覧
+                    plHtml += `
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+                        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;text-align:center;">
+                            <div style="font-size:10px;color:#94a3b8;font-weight:700;margin-bottom:6px;">手元資金</div>
+                            <div style="font-size:15px;font-weight:900;color:var(--primary);">¥${f(cur.cash)}</div>
+                        </div>
+                        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;text-align:center;">
+                            <div style="font-size:10px;color:#94a3b8;font-weight:700;margin-bottom:6px;">時価総額</div>
+                            <div style="font-size:15px;font-weight:900;">¥${f(cur.mc)}</div>
+                            ${_mcYoY}
+                        </div>
+                        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;text-align:center;">
+                            <div style="font-size:10px;color:#94a3b8;font-weight:700;margin-bottom:6px;">店舗数 / 客数</div>
+                            <div style="font-size:15px;font-weight:900;">${cur.stores}店</div>
+                            <div style="font-size:10px;color:#64748b;font-weight:700;">${cur.customers.toLocaleString()}人/週</div>
+                        </div>
+                    </div>`;
+                }
+
+                bodyHtml = headerHtml + plHtml;
+                container.innerHTML = tabHtml + bodyHtml;
+                return; // P/Lタブはここで完了
+            }
+
+            // ═══ タブ2-4: 既存の財務UI ═══
             let currentTax = Math.max(0, (playerLobbyBonusTurns > 0 ? 10 : globalTaxRate * 100) - (cfo ? cfo.level * 5 : 0));
 
             // 🏦 【追加】残り週数の計算
@@ -7430,22 +8107,8 @@ ${ds.desc}`)) {
                     return `<option value="${b.id}" ${isSelected}>${b.name.replace(/\[.*?\]\s*/, '')} ${label} | 普通+${dRate}% 定期+${tdRate}% 借入-${lRate}%</option>`;
                 }).join('');
 
-            container.innerHTML = `
-                <div class="flex-between" style="margin-bottom: 24px; border-bottom: 3px solid var(--primary); padding-bottom: 12px;">
-                    <h2 style="margin:0;"><span style="font-size:24px;">📊</span> 財務・ポートフォリオ</h2>
-                </div>
-                <div class="card" style="background:var(--bg); border:none;">
-                    <div style="font-weight:900; margin-bottom:15px; display:flex; gap:15px; align-items:center;">
-                        <span>🏛️ 標準法人税: ${(globalTaxRate * 100).toFixed(0)}%</span>
-                        <span class="text-success">➡️ 適用税率: ${currentTax.toFixed(0)}%</span>
-                    </div>
-                    <div class="grid-3">
-                        <div class="stat-box"><div class="label">自社 時価総額</div><div class="value">¥${p.marketCap.toLocaleString()}</div></div>
-                        <div class="stat-box"><div class="label">自社 株価</div><div class="value">¥${p.stockPrice.toLocaleString()}</div></div>
-                        <div class="stat-box"><div class="label">累計 受取配当金</div><div class="value text-success">¥${playerTotalDividends.toLocaleString()}</div></div>
-                    </div>
-                </div>
-
+            container.innerHTML = tabHtml + `
+                <div style="display:${window._finTab === 'bank' ? 'block' : 'none'}">
                 <h3 style="margin-top:30px; border-bottom:2px solid var(--border); padding-bottom:10px;">
                     🏦 メインバンク取引 ${bankStatusHtml}
                 </h3>
@@ -7517,6 +8180,8 @@ ${ds.desc}`)) {
                     <button class="btn-primary" style="width:100%; margin-top:10px; background:var(--gold); color:#000; font-weight:900;" onclick="executeBankAction('term_deposit')">🔒 定期預金（1年ロック・週+0.3%）</button>
                     <div id="disp-term-deposits" style="margin-top:10px; font-size:12px;"></div>
                 </div>
+                </div>
+                <div style="display:${window._finTab === 'policy' ? 'block' : 'none'}">
                 <h3>⚙️ アクション</h3>
                 <div class="grid-2" style="margin-bottom:30px;">
                     ${!p.isPublic ? `<div class="card" style="border: 2px solid var(--warning); background:#fffbeb;">
@@ -7590,8 +8255,18 @@ ${ds.desc}`)) {
                         </div>
                     </div>`}
                 </div>
+                </div>
+                <div style="display:${window._finTab === 'portfolio' ? 'block' : 'none'}">
+                <div class="card" style="background:var(--bg); border:none;">
+                    <div class="grid-3">
+                        <div class="stat-box"><div class="label">自社 時価総額</div><div class="value">¥${p.marketCap.toLocaleString()}</div></div>
+                        <div class="stat-box"><div class="label">自社 株価</div><div class="value">¥${p.stockPrice.toLocaleString()}</div></div>
+                        <div class="stat-box"><div class="label">累計 受取配当金</div><div class="value text-success">¥${playerTotalDividends.toLocaleString()}</div></div>
+                    </div>
+                </div>
                 <h3>🏢 所有ビル一覧</h3>
                 <div id="owned-props-grid" class="grid-3"></div>
+                </div>
             `;
             setTimeout(updateBankUI, 10);
             setTimeout(renderOwnedPropsGrid, 20);
@@ -8650,30 +9325,40 @@ ${ds.desc}`)) {
                 if (a > window.getMarketShares(c)) return alert("市場に出回っている株が不足しています。");
 
                 let currentOwned = c.shareholders['player'] || 0;
-                let newRatio = (currentOwned + a) / c.shares;
+                let newOwned = currentOwned + a;
+                let newRatio = newOwned / c.shares;
+                let oldRatio = currentOwned / c.shares;
                 // 市場直接買付は40%未満に制限
                 if (newRatio >= 0.40 && c.id !== 'player') return alert("【法規制】市場での直接買付は発行済株式の40%未満に制限されています。\n過半数を取得して買収するには「TOB (公開買付)」を宣言してください。");
 
                 p.cash -= cost;
-                c.shareholders['player'] = currentOwned + a;
-                // 市場流通株から減算
+                c.shareholders['player'] = newOwned;
                 if (c.shareholders['market'] !== undefined) {
                     c.shareholders['market'] = Math.max(0, (c.shareholders['market'] || 0) - a);
                 }
                 c.playerTotalCost += cost;
-                addLog(`市場で ${c.name.replace(/\[.*?\]\s*/, '')} を ${a.toLocaleString()}株 購入しました。`, 'normal', 'M&A');
+                let _cName = c.name.replace(/\[.*?\]\s*/, '');
+                let _newPct = (newRatio * 100).toFixed(1);
+                addLog(`【株式取得】${_cName} を ${a.toLocaleString()}株 購入（¥${Math.floor(cost / 10000).toLocaleString()}万）→ 保有${_newPct}%`, 'success', 'M&A', 3);
+                // マイルストーン通知
+                if (oldRatio < 0.05 && newRatio >= 0.05) addLog(`【大量保有報告】${_cName} の株式5%を突破。大量保有報告義務が発生しました。`, 'news', 'M&A', 4);
+                if (oldRatio < 0.10 && newRatio >= 0.10) addLog(`【主要株主】${_cName} の株式10%を取得。主要株主として登録されます。`, 'alert', 'M&A', 4);
+                if (oldRatio < 0.20 && newRatio >= 0.20) addLog(`【筆頭株主】${_cName} の株式20%を取得！持分法適用関連会社化。経営への影響力が増大します。`, 'alert', 'M&A', 5);
+                if (oldRatio < 0.33 && newRatio >= 0.33) addLog(`【拒否権取得】${_cName} の株式1/3超を取得！重要事項の拒否権を獲得しました。TOBで過半数取得を目指しましょう。`, 'alert', 'M&A', 5);
             } else {
                 let o = c.shareholders['player'] || 0; if (o < a) return alert("保有株数が不足しています。");
                 let profitPerShare = c.stockPrice - (c.playerTotalCost / o);
-                window.weeklyStockSaleProfit = (window.weeklyStockSaleProfit || 0) + (profitPerShare * a);
+                let totalProfit = profitPerShare * a;
+                window.weeklyStockSaleProfit = (window.weeklyStockSaleProfit || 0) + totalProfit;
 
                 p.cash += cost;
                 c.playerTotalCost -= (c.playerTotalCost / o) * a;
                 c.shareholders['player'] -= a;
-                // 売却分を市場流通株に戻す
                 if (c.isPublic) c.shareholders['market'] = (c.shareholders['market'] || 0) + a;
                 if (c.shareholders['player'] === 0) c.playerTotalCost = 0;
-                addLog(`保有する ${c.name.replace(/\[.*?\]\s*/, '')} を ${a.toLocaleString()}株 売却しました。`, 'normal', 'M&A');
+                let _cName2 = c.name.replace(/\[.*?\]\s*/, '');
+                let _profSign = totalProfit >= 0 ? '+' : '';
+                addLog(`【株式売却】${_cName2} ${a.toLocaleString()}株 売却（売却益 ${_profSign}¥${Math.floor(totalProfit / 10000).toLocaleString()}万）`, totalProfit >= 0 ? 'success' : 'warning', 'M&A', 3);
             }
             closeModal('trade-modal'); updateDashboard(); renderPortfolio();
         };
@@ -8716,13 +9401,13 @@ ${ds.desc}`)) {
                 // 新株発行により株価が下がる
                 c.stockPrice = Math.max(10, Math.floor(c.marketCap / c.shares));
 
-                addLog(`【DES実行】債権を株式に転換し、${c.name.replace(/\[.*?\]\s*/, '')} の株式 ${sharesToGet.toLocaleString()} 株を取得しました！`, 'alert', 'M&A');
+                addLog(`【DES実行】債権を株式に転換し、${c.name.replace(/\[.*?\]\s*/, '')} の株式 ${sharesToGet.toLocaleString()} 株を取得しました！`, 'alert', 'M&A', 5);
 
                 // もし過半数を握ったら子会社化
                 if (window.getFloatPct(c, 'player') > 0.50) {
                     c.parent = 'player';
                     c.name = `[自社傘下] ${c.name.replace(/\[.*?\]\s*/, '')}`;
-                    addLog(`【支配】過半数の株式を取得し、子会社化しました！`, 'success', 'M&A');
+                    addLog(`【支配】過半数の株式を取得し、${c.name.replace(/\[.*?\]\s*/, '')} を子会社化しました！`, 'success', 'M&A', 5);
                 }
                 closeModal('trade-modal'); updateDashboard(); updateMarket();
             }
@@ -9036,7 +9721,7 @@ ${ds.desc}`)) {
             // 再建進捗を初期化
             cx._rebirthStartWeek = week;
             delete cx._bankruptProc; delete cx._bankruptProcWeek;
-            addLog(`【救済買収】${cName} をプレイヤーが救済買収しました！傘下として再建スタート（55%取得）。`, 'success', 'M&A');
+            addLog(`【救済買収】${cName} をプレイヤーが救済買収しました！傘下として再建スタート（55%取得）。`, 'success', 'M&A', 5);
             updateDashboard();
             renderSubsidiaryList();
         };
@@ -9411,7 +10096,7 @@ ${ds.desc}`)) {
 
             const catIcon = {
                 '世界情勢': '🗺', '経済': '📊', '政治': '⚖️', '自社': '👑', 'M&A': '🤝',
-                '不動産': '🏢', '店舗': '☕', '財務': '💰', '金融': '🏦', '総合': '📋', '競合': '🔍',
+                '不動産': '🏢', '店舗': '☕', '財務': '💰', '金融': '🏦', '総合': '📋', '競合': '🔍', '物価': '📈',
             };
             const typeConfig2 = {
                 'alert': { bg: '#fff1f2', border: '#fca5a5', badge: '#ef4444', dot: '#ef4444' },
@@ -9421,7 +10106,7 @@ ${ds.desc}`)) {
                 'warning': { bg: '#fffbeb', border: '#fcd34d', badge: '#d97706', dot: '#d97706' },
             };
 
-            let categories = ['すべて', '🔴緊急', '世界情勢', '経済', '政治', '自社', 'M&A', '競合', '不動産', '店舗', '財務'];
+            let categories = ['すべて', '🔴緊急', '世界情勢', '経済', '政治', '自社', 'M&A', '競合', '物価', '不動産', '店舗', '財務'];
             let dateStr = `${2020 + Math.floor((week - 1) / 48)}年 ${Math.floor(((week - 1) % 48) / 4) + 1}月 第${((week - 1) % 4) + 1}週`;
 
             // 3週分のログを取得
@@ -11005,24 +11690,17 @@ ${ds.desc}`)) {
                 </div>
             </div>`;
 
-            // ── infraHtmlをR&Dの前に挿入し、広告セクション用のdivを設置 ──
-            {
-                let _html = container.innerHTML;
-                let _rdIdx = _html.indexOf('イノベーション');
-                if (_rdIdx !== -1) {
-                    let _ins = _html.lastIndexOf('<h3', _rdIdx);
-                    container.innerHTML = _html.slice(0, _ins) + infraHtml
-                        + '<h3 style="border-bottom:2px solid var(--border);padding-bottom:10px;margin-top:30px;">\uD83D\uDCE3 グローバル広告・ブランド戦略</h3>'
-                        + '<div id="ad-section-root" style="margin-bottom:30px;"></div>'
-                        + _html.slice(_ins);
-                } else {
-                    container.innerHTML += infraHtml
-                        + '<h3 style="border-bottom:2px solid var(--border);padding-bottom:10px;margin-top:30px;">\uD83D\uDCE3 グローバル広告・ブランド戦略</h3>'
-                        + '<div id="ad-section-root" style="margin-bottom:30px;"></div>';
-                }
+            // ── infraHtmlをプレースホルダーに挿入（innerHTMLを書き換えない） ──
+            let _infraPlaceholder = document.getElementById('hq-infra-placeholder');
+            if (_infraPlaceholder) {
+                _infraPlaceholder.innerHTML = infraHtml;
             }
-            // DOM反映を待ってから描画
-            setTimeout(function () { if (typeof window.renderAdSection === 'function') window.renderAdSection(); }, 50);
+            // 広告タブが選択されてる場合のみ描画
+            if (window.currentRndCategory === 'ad') {
+                setTimeout(function () {
+                    if (typeof window.renderAdSection === 'function') window.renderAdSection();
+                }, 30);
+            }
         };
 
         window.changeInsurance = function (country, val) {
@@ -11046,8 +11724,12 @@ ${ds.desc}`)) {
             const AD_TYPE_LABELS = { mass: 'マス媒体📺', digital: 'デジタル📱', total: '総合代理店🌐' };
             const cMapAd = { 'TOKYO': 'JP', 'OSAKA': 'JP', 'USA': 'USA', 'CHINA': 'CHINA', 'UK': 'UK', 'KOREA': 'KOREA', 'AUSTRALIA': 'AUS', 'CANADA': 'CAN', 'FRANCE': 'FRA', 'GERMANY': 'GER', 'INDIA': 'IND' };
 
-            // 出店中の国 + JP は必ず表示
-            let activeCountries = [...new Set(['JP', ...p.stores.map(s => cMapAd[s.regionKey]).filter(Boolean)])];
+            // 出店中の国のみ表示（出店してない国は非表示）
+            let activeCountries = [...new Set(p.stores.map(s => cMapAd[s.regionKey]).filter(Boolean))];
+            if (activeCountries.length === 0) {
+                root.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-mut);font-weight:700;">まだどの国にも出店していません。<br>店舗を出店すると、その国の広告代理店が利用できます。</div>';
+                return;
+            }
             if (!window._currentAdCountry || !activeCountries.includes(window._currentAdCountry)) {
                 window._currentAdCountry = activeCountries[0];
             }
@@ -11240,7 +11922,7 @@ ${ds.desc}`)) {
 
             // トップ5株主の算出（5%以上保有している実質的支配者たち）
             let topShareholders = Object.keys(p.shareholders)
-                .filter(id => id !== 'player' && p.shareholders[id] > 0)
+                .filter(id => id !== 'player' && id !== 'market' && id !== p.id && p.shareholders[id] > 0)
                 .map(id => ({ id, shares: p.shareholders[id] }))
                 .sort((a, b) => b.shares - a.shares)
                 .slice(0, 5);
@@ -11259,7 +11941,7 @@ ${ds.desc}`)) {
                 topShareholders.forEach((sh, index) => {
                     let ai = companies.find(c => c.id === sh.id);
                     if (!ai) return;
-                    let sharePct = ((sh.shares / p.shares) * 100).toFixed(1);
+                    let sharePct = (window.getFloatPct(p, sh.id) * 100).toFixed(1);
                     let loyalty = ai.loyalty || 50;
                     let loyaltyColor = loyalty >= 70 ? 'var(--success)' : (loyalty >= 40 ? 'var(--warning)' : 'var(--danger)');
                     let rank = index === 0 ? '👑 筆頭株主' : `第${index + 1}位`;
@@ -11687,7 +12369,7 @@ ${ds.desc}`)) {
                     document.getElementById('text-no').innerText = finalNo.toLocaleString();
 
                     // tob_offer はプレイヤー個人の売却判断なので多数決を使わず直接反映
-                    let isPassed = eventData.type === 'tob_offer' ? playerIsYes : yesPct > 50;
+                    let isPassed = (eventData.type === 'tob_offer' || eventData.type === 'subsidiary_dilution') ? playerIsYes : yesPct > 50;
                     let resultTextEl = document.getElementById('voting-final-text');
                     resultTextEl.innerText = isPassed ? "⭕ 議案は【可決】されました" : "❌ 議案は【否決】されました";
                     resultTextEl.style.color = isPassed ? "var(--success)" : "var(--danger)";
@@ -11754,7 +12436,7 @@ ${ds.desc}`)) {
             if (!p.isPublic || Object.keys(p.shareholders).filter(id => p.shareholders[id] > 0).length === 0) {
                 voters = [{ id: 'player', shares: p.shares || 10000 }];
             } else {
-                voters = Object.keys(p.shareholders).filter(id => p.shareholders[id] > 0).map(id => ({ id: id, shares: p.shareholders[id] })).sort((a, b) => b.shares - a.shares).slice(0, 5);
+                voters = Object.keys(p.shareholders).filter(id => p.shareholders[id] > 0 && id !== 'market' && id !== p.id).map(id => ({ id: id, shares: p.shareholders[id] })).sort((a, b) => b.shares - a.shares).slice(0, 5);
             }
             let totalVotes = voters.reduce((s, v) => s + v.shares, 0);
             let approveVotes = 0;
@@ -11930,9 +12612,9 @@ ${ds.desc}`)) {
                 if (finalPct > 0.50) {
                     tc.parent = 'player';
                     tc.name = '👑 [自社傘下] ' + tgtN;
-                    addLog(`【TOB成功】${tgtN} を子会社化しました！(${Math.floor(finalPct * 100)}%取得 / ${acquired.toLocaleString()}株取得)`, 'success', 'M&A');
+                    addLog(`【TOB成功】${tgtN} を子会社化しました！(${Math.floor(finalPct * 100)}%取得 / ${acquired.toLocaleString()}株取得)`, 'success', 'M&A', 5);
                 } else {
-                    addLog(`【TOB部分成立】${tgtN} の取得は${Math.floor(finalPct * 100)}%止まり（${acquired.toLocaleString()}株取得）。追加TOBを検討してください。`, 'alert', 'M&A');
+                    addLog(`【TOB部分成立】${tgtN} の取得は${Math.floor(finalPct * 100)}%止まり（${acquired.toLocaleString()}株取得）。追加TOBを検討してください。`, 'alert', 'M&A', 4);
                 }
                 document.getElementById('tob-confirm-modal')?.remove();
                 updateDashboard();
