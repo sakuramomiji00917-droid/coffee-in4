@@ -9066,10 +9066,10 @@ ${ds.desc}`)) {
                 p.cash -= _bankFee;
                 _bankCo.cash += _bankFee;
                 _bankCo.qNet = (_bankCo.qNet || 0) + _bankFee;
-                addLog(`【送金手数料】${_bankCo.name.replace(/\[.*?\]\s*/g, '')} に手数料 ¥${Math.floor(_bankFee / 10000).toLocaleString()}万 を支払い。`, 'normal', '財務');
+                addLog(`【送金手数料】${_bankCo.name.replace(/\[.*?\]\s*/g, '')} に手数料 ¥${Math.floor(_bankFee / 10000).toLocaleString()}万 を支払い。`, 'normal', 'M&A');
             }
-            if (fee > 0) addLog(`【海外資金援助】${sub.name.replace(/\[.*?\]\s*/g, '')} に ¥${Math.floor(amt / 10000).toLocaleString()}万 を送金。海外手数料 ¥${Math.floor(fee / 10000).toLocaleString()}万。`, 'normal', '財務');
-            else addLog(`【資金援助】${sub.name.replace(/\[.*?\]\s*/g, '')} に ¥${Math.floor(amt / 10000).toLocaleString()}万 を送金。`, 'success', '財務');
+            if (fee > 0) addLog(`【海外資金援助】${sub.name.replace(/\[.*?\]\s*/g, '')} に ¥${Math.floor(amt / 10000).toLocaleString()}万 を送金。海外手数料 ¥${Math.floor(fee / 10000).toLocaleString()}万。`, 'success', 'M&A', 3);
+            else addLog(`【資金援助】${sub.name.replace(/\[.*?\]\s*/g, '')} に ¥${Math.floor(amt / 10000).toLocaleString()}万 を送金。`, 'success', 'M&A', 3);
             renderSubsidiaryList(); updateDashboard();
         };
 
@@ -9097,7 +9097,7 @@ ${ds.desc}`)) {
             // 株価影響（大量売却→株価-3〜8%）
             let impact = 1 - (h.shares / h.co.shares) * 0.5;
             h.co.stockPrice = Math.max(1, Math.floor(h.co.stockPrice * impact));
-            addLog(`【株売却命令】${sub.name.replace(/\[.*?\]\s*/g, '')} が ${h.co.name.replace(/\[.*?\]\s*/g, '')} 株を全売却。¥${Math.floor(h.value / 10000).toLocaleString()}万 を回収。`, 'success', 'M&A');
+            addLog(`【株売却命令】${sub.name.replace(/\[.*?\]\s*/g, '')} が ${h.co.name.replace(/\[.*?\]\s*/g, '')} 株を全売却。¥${Math.floor(h.value / 10000).toLocaleString()}万 を回収。`, 'success', 'M&A', 3);
             renderSubsidiaryList(); updateDashboard();
         };
 
@@ -9177,7 +9177,7 @@ ${ds.desc}`)) {
             });
             let subIdx = companies.findIndex(c => c.id === subId);
             let newMktCap = Math.floor(survivor.stockPrice * survivor.shares / 10000);
-            addLog(`【子会社合併】${sub.name.replace(/\[.*?\]\s*/g, '')} → ${survivor.name.replace(/\[.*?\]\s*/g, '')} に統合。発行株数: ${survivor.shares.toLocaleString()}株 / 時価総額: ¥${newMktCap.toLocaleString()}万`, 'success', 'M&A');
+            addLog(`【子会社合併】${sub.name.replace(/\[.*?\]\s*/g, '')} → ${survivor.name.replace(/\[.*?\]\s*/g, '')} に統合。発行株数: ${survivor.shares.toLocaleString()}株 / 時価総額: ¥${newMktCap.toLocaleString()}万`, 'success', 'M&A', 4);
             companies.splice(subIdx, 1);
             renderSubsidiaryList(); updateDashboard();
         };
@@ -9196,7 +9196,7 @@ ${ds.desc}`)) {
             }
             gs.parent = 'player';
             gs.name = '[自社傘下] ' + gs.name.replace(/\[.*?\]\s*/g, '');
-            addLog(`【組織再編】${gs.name.replace(/\[.*?\]\s*/g, '')} を直接子会社として昇格させました。`, 'success', 'M&A');
+            addLog(`【組織再編】${gs.name.replace(/\[.*?\]\s*/g, '')} を直接子会社として昇格させました。`, 'success', 'M&A', 4);
             renderSubsidiaryList(); updateDashboard();
         };
 
@@ -9213,9 +9213,9 @@ ${ds.desc}`)) {
                 : `【資金吸い上げ】子会社の現金 ¥${Math.floor(amt / 10000).toLocaleString()}万 を回収しますか？`;
             if (confirm(msg)) {
                 sub.cash -= amt; p.cash += netAmt;
-                if (taxAmt > 0) addLog(`【海外送金税】${sub.name.replace(/\[.*?\]\s*/, '')}から送金。送金税 ¥${Math.floor(taxAmt / 10000).toLocaleString()}万 を納付。`, 'warning', '財務');
+                if (taxAmt > 0) addLog(`【海外送金税】${sub.name.replace(/\[.*?\]\s*/, '')}から送金。送金税 ¥${Math.floor(taxAmt / 10000).toLocaleString()}万 を納付。`, 'warning', 'M&A', 3);
                 window.weeklySiphonedCash = (window.weeklySiphonedCash || 0) + netAmt;
-                addLog(`【支配】子会社から ¥${Math.floor(netAmt / 10000).toLocaleString()}万 を回収。`, 'success', 'M&A'); renderSubsidiaryList(); updateDashboard();
+                addLog(`【資金回収】${sub.name.replace(/\[.*?\]\s*/, '')} から ¥${Math.floor(netAmt / 10000).toLocaleString()}万 を回収。`, 'success', 'M&A', 3); renderSubsidiaryList(); updateDashboard();
             }
         };
         window.subActionRebrand = function (subId) {
@@ -9227,7 +9227,7 @@ ${ds.desc}`)) {
                 sub.name = `[${pName}統合] ${sub.name.replace(/\[.*?\]\s*/, '')}`;
                 sub.stores.forEach(s => s.name = s.name.replace(/\[.*?\]/, `[${pName}直営]`));
                 sub._isBranded = true; // ブランド統合フラグ
-                addLog(`【ブランド統合】¥${(cost / 10000).toLocaleString()}万を投じて統合完了。知名度・メニュー共有・利益20%受取が適用されます。`, 'success', 'M&A');
+                addLog(`【ブランド統合】${sub.name.replace(/\[.*?\]\s*/, '')} に ¥${(cost / 10000).toLocaleString()}万を投じて統合完了。知名度・メニュー共有・利益20%受取。`, 'success', 'M&A', 4);
                 renderSubsidiaryList();
             }
         };
@@ -9241,7 +9241,7 @@ ${ds.desc}`)) {
                     if (dist) dist.properties[op.idx].owner = null;
                     ownedProperties.splice(ownedProperties.indexOf(op), 1);
                 });
-                p.cash += val; addLog(`【支配】子会社のビルを強制売却させました。`, 'success', 'M&A'); renderSubsidiaryList(); updateDashboard();
+                p.cash += val; addLog(`【資産売却】${sub.name.replace(/\[.*?\]\s*/, '')} のビルを強制売却。¥${Math.floor(val / 10000).toLocaleString()}万 を回収。`, 'success', 'M&A', 3); renderSubsidiaryList(); updateDashboard();
             }
         };
         window.subActionMerge = function (subId) {
@@ -9344,7 +9344,7 @@ ${ds.desc}`)) {
                     p.shareholders[c.id] = (p.shareholders[c.id] || 0) + sub.shareholders[c.id];
                 }
             });
-            addLog(`【M&A】${sub.name.replace(/\[.*?\]\s*/,'')} を完全吸収合併。現金¥${Math.floor(sub.cash/10000).toLocaleString()}万・預金¥${Math.floor((subDeposits+subTermDeps)/10000).toLocaleString()}万を引継ぎました。`, 'success', '特報');
+            addLog(`【吸収合併】${sub.name.replace(/\[.*?\]\s*/,'')} を完全吸収合併。現金¥${Math.floor(sub.cash/10000).toLocaleString()}万・預金¥${Math.floor((subDeposits+subTermDeps)/10000).toLocaleString()}万を引継ぎました。`, 'success', 'M&A', 4);
             companies.splice(subIdx, 1); renderSubsidiaryList(); updateDashboard();
         };
 
