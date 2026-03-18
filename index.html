@@ -12498,10 +12498,17 @@ ${ds.desc}`)) {
             let p = companies[0], target = companies.find(c => c.id === targetId);
             // 非上場：株主がいないのでCEO（プレイヤー）単独の議決権100%
             let voters;
-            if (!p.isPublic || Object.keys(p.shareholders).filter(id => p.shareholders[id] > 0).length === 0) {
+            if (!p.isPublic || Object.keys(p.shareholders).filter(id => p.shareholders[id] > 0 && id !== 'market' && id !== p.id).length === 0) {
                 voters = [{ id: 'player', shares: p.shares || 10000 }];
             } else {
-                voters = Object.keys(p.shareholders).filter(id => p.shareholders[id] > 0 && id !== 'market' && id !== p.id).map(id => ({ id: id, shares: p.shareholders[id] })).sort((a, b) => b.shares - a.shares).slice(0, 5);
+                // プレイヤー（CEO）も投票者として含める（自分の持株で投票）
+                voters = [{ id: 'player', shares: p.shareholders['player'] || 0 }];
+                let externalVoters = Object.keys(p.shareholders)
+                    .filter(id => p.shareholders[id] > 0 && id !== 'market' && id !== p.id && id !== 'player')
+                    .map(id => ({ id: id, shares: p.shareholders[id] }))
+                    .sort((a, b) => b.shares - a.shares)
+                    .slice(0, 5);
+                voters = voters.concat(externalVoters);
             }
             let totalVotes = voters.reduce((s, v) => s + v.shares, 0);
             let approveVotes = 0;
