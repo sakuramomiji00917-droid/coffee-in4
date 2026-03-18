@@ -1320,13 +1320,14 @@
             return 1.0 + mData.baseBonus * s;
         }
         // 会社の全メニューボーナス合算
-        function calcUnlockedBonus(co, roasterDrinkBonus) {
+        function calcUnlockedBonus(co, roasterDrinkBonus, allStarBonus) {
             let drinkBonus = roasterDrinkBonus || 0;
+            let allBonus = allStarBonus || 0;
             return (co.unlockedMenus || []).reduce((sum, mId) => {
                 let mData = coffeeMenus.find(m => m.id === mId);
                 if (!mData) return sum;
                 let stars = (co.menuStars || {})[mId] || 1;
-                let extra = (mData.type === 'drink') ? drinkBonus : 0;
+                let extra = ((mData.type === 'drink') ? drinkBonus : 0) + allBonus;
                 let s = Math.min(10, stars + extra);
                 return sum + mData.baseBonus * s;
             }, 1.0);
@@ -1785,11 +1786,20 @@
             }
         };
 
-        window.addLog = function (msg, type = 'normal', category = '総合') {
-            // week++が週次処理の最初に来るため、ログ記録時は1引いた週番号を使う
+        window.addLog = function (msg, type = 'normal', category = '総合', priority) {
+            // 優先度自動判定（5=最重要, 1=軽微）
+            if (priority === undefined) {
+                if (type === 'alert' && (msg.includes('TOB') || msg.includes('買収') || msg.includes('GAME OVER') || msg.includes('最終警告'))) priority = 5;
+                else if (type === 'alert') priority = 4;
+                else if (type === 'success' && (msg.includes('子会社化') || msg.includes('TOB成功') || msg.includes('IPO'))) priority = 4;
+                else if (type === 'warning') priority = 3;
+                else if (type === 'success') priority = 3;
+                else if (type === 'news') priority = 2;
+                else priority = 1;
+            }
             let _logWeek = Math.max(1, week - 1);
             let thisWeekStr = `${2020 + Math.floor((_logWeek - 1) / 48)}年 ${Math.floor(((_logWeek - 1) % 48) / 4) + 1}月 ${((_logWeek - 1) % 4) + 1}週`;
-            window.logHistory.unshift({ week: thisWeekStr, msg: msg, type: type, category: category });
+            window.logHistory.unshift({ week: thisWeekStr, msg: msg, type: type, category: category, priority: priority });
             if (window.logHistory.length > 500) window.logHistory.pop();
             if (document.getElementById('view-news')?.classList.contains('active')) {
                 if (typeof renderNewspaper === 'function') renderNewspaper();
@@ -1989,13 +1999,11 @@
                 : activeTab === '🔴緊急' ? allLogs.filter(l => l.type === 'alert')
                     : allLogs.filter(l => l.category === activeTab);
 
-            // トップニュース（M&Aカテゴリのalertを最優先、次にその他alert）
-            let _maAlerts = logs.filter(l => l.type === 'alert' && l.category === 'M&A');
-            let _otherAlerts = logs.filter(l => l.type === 'alert' && l.category !== 'M&A');
-            let _sortedLogs = [..._maAlerts, ..._otherAlerts, ...logs.filter(l => l.type !== 'alert')];
-            let topLog = _sortedLogs[0] || null;
-            let secondary = _sortedLogs.filter(l => l !== topLog).slice(0, 2);
-            let minor = _sortedLogs.filter(l => l !== topLog && !secondary.includes(l));
+            // トップニュース（priority降順、同priority内はalert優先）
+            let _sorted = [...logs].sort((a, b) => (b.priority || 1) - (a.priority || 1));
+            let topLog = _sorted[0] || null;
+            let secondary = _sorted.filter(l => l !== topLog).slice(0, 2);
+            let minor = _sorted.filter(l => l !== topLog && !secondary.includes(l));
 
             // タブHTML
             let tabsHtml = cats.map(cat => {
@@ -2380,10 +2388,25 @@
             window._infraAdBonus = infraAdBonus;
             window._infraMgrLvBonus = infraMgrLvBonus;
 
+            // 📊 デジタルサービス効果を先行集計（店舗計算で使用するため）
+            if (!p._digitalEffects) {
+                p._digitalEffects = { missedReduction: 0, satBonus: 0, hrCostReduction: 0, menuStarBonus: 0, satToSaleBonus: 0 };
+                (p.digitalOwned || []).forEach(did => {
+                    let ds = digitalServices.find(d => d.id === did);
+                    if (!ds || !ds.effect) return;
+                    if (ds.effect.missedReduction) p._digitalEffects.missedReduction += ds.effect.missedReduction;
+                    if (ds.effect.satBonus) p._digitalEffects.satBonus += ds.effect.satBonus;
+                    if (ds.effect.hrCostReduction) p._digitalEffects.hrCostReduction += ds.effect.hrCostReduction;
+                    if (ds.effect.menuStarBonus) p._digitalEffects.menuStarBonus += ds.effect.menuStarBonus;
+                    if (ds.effect.satToSaleBonus) p._digitalEffects.satToSaleBonus += ds.effect.satToSaleBonus;
+                });
+            }
+
             let districtDemands = {};
             companies.forEach(c => {
                 if (c.sector !== 'coffee' || c.isBankrupt) return;
-                let unlockedBonus = c.unlockedMenus ? calcUnlockedBonus(c, (roasterDefs.find(r => r.id === (c.roasterEquip || {}).id) || roasterDefs[0]).drinkStar) : 1.0;
+                let _digiMenuStar = (c.id === 'player' && companies[0]._digitalEffects) ? (companies[0]._digitalEffects.menuStarBonus || 0) : 0;
+                let unlockedBonus = c.unlockedMenus ? calcUnlockedBonus(c, (roasterDefs.find(r => r.id === (c.roasterEquip || {}).id) || roasterDefs[0]).drinkStar, _digiMenuStar) : 1.0;
                 c.stores.forEach(s => {
                     if (!s.regionKey || !s.location) return; let dKey = `${s.regionKey}_${s.location}`; if (!districtDemands[dKey]) districtDemands[dKey] = { totalTraffic: 0, stores: [] };
                     let brandMult = (c.id !== 'player' && c._brandBonus) ? c._brandBonus : 1.0;
@@ -2410,6 +2433,8 @@
                         // stats[3] 魅力★ → 集客ボーナス（★5で+10%）
                         let _charmBonus = (s.hasManager && s.managerData?.stats) ? 1 + s.managerData.stats[3] * 0.02 : 1;
                         appeal *= trafficMult * syn.traffic * infraTrafficBonus * _charmBonus;
+                        // 焙煎設備の魅力ボーナス（AI焙煎機+5%、世界最高峰+10%）
+                        if (p._roasterAppealBonus > 0) appeal *= (1 + p._roasterAppealBonus);
                     } else {
                         appeal *= (1.0 + (c.marketCap / 500000000));
                     }
@@ -2659,6 +2684,18 @@
                     if (itCo) { itCo.cash += fee; itCo.qNet = (itCo.qNet || 0) + fee; itCo.lastRevenue = (itCo.lastRevenue || 0) + fee; itCo.lastExpense = (itCo.lastExpense || 0) + Math.floor(fee * 0.4); itCo.lastProfit = itCo.lastRevenue - itCo.lastExpense; }
                 });
             })();
+
+            // 📊 デジタルサービス効果を集計（店舗計算で使用）
+            p._digitalEffects = { missedReduction: 0, satBonus: 0, hrCostReduction: 0, menuStarBonus: 0, satToSaleBonus: 0 };
+            (p.digitalOwned || []).forEach(did => {
+                let ds = digitalServices.find(d => d.id === did);
+                if (!ds || !ds.effect) return;
+                if (ds.effect.missedReduction) p._digitalEffects.missedReduction += ds.effect.missedReduction;
+                if (ds.effect.satBonus) p._digitalEffects.satBonus += ds.effect.satBonus;
+                if (ds.effect.hrCostReduction) p._digitalEffects.hrCostReduction += ds.effect.hrCostReduction;
+                if (ds.effect.menuStarBonus) p._digitalEffects.menuStarBonus += ds.effect.menuStarBonus;
+                if (ds.effect.satToSaleBonus) p._digitalEffects.satToSaleBonus += ds.effect.satToSaleBonus;
+            });
 
             // 🚀 新事業維持費・収益（ケータリング/通販は物流企業へ）
             (function processBiz() {
@@ -3224,6 +3261,10 @@
                         if (c.id === 'player' && infraMissedReduction > 0) {
                             maxCapacity = Math.floor(maxCapacity * (1 + infraMissedReduction));
                         }
+                        // デジタルサービス: 逃し客削減（モバイルオーダー等）
+                        if (c.id === 'player' && p._digitalEffects && p._digitalEffects.missedReduction > 0) {
+                            maxCapacity = Math.floor(maxCapacity * (1 + p._digitalEffects.missedReduction));
+                        }
                         let handledTraffic = Math.min(finalTraffic, maxCapacity);
                         s.missedTraffic = finalTraffic - handledTraffic;
 
@@ -3258,8 +3299,12 @@
                         }
                         // 物流speciality: 満足度ボーナス
                         let _infraSatBonus = (c.id === 'player') ? infraSatisfBonus : 0;
+                        // 焙煎設備の満足度ボーナス
+                        let _equipSatBonus = (c.id === 'player' && p._roasterSatBonus) ? p._roasterSatBonus : 0;
+                        // デジタルサービスの満足度ボーナス
+                        let _digiSatBonus = (c.id === 'player' && p._digitalEffects) ? (p._digitalEffects.satBonus || 0) : 0;
                         // 計算した目標満足度に向けてゆっくり近づく（急変防止）
-                        let targetSat = Math.min(100, Math.floor(price_sat + cap_sat + share_sat + mgr_sat + starSatBonus + _infraSatBonus));
+                        let targetSat = Math.min(100, Math.floor(price_sat + cap_sat + share_sat + mgr_sat + starSatBonus + _infraSatBonus + _equipSatBonus + _digiSatBonus));
                         s.satisfaction = Math.floor((s.satisfaction ?? 60) * 0.7 + targetSat * 0.3);
 
                         // ── 常連客の増減 ──
@@ -3299,12 +3344,25 @@
                                 if (s.regionKey !== 'TOKYO' && s.regionKey !== 'OSAKA') rev = Math.floor(rev * (1 - _fxRate));
                             }
                         }
+                        // 🔥 焙煎設備の売上ボーナス
+                        if (c.id === 'player' && p._roasterSaleBonus > 0) {
+                            rev = Math.floor(rev * (1 + p._roasterSaleBonus));
+                        }
+                        // 💻 デジタルサービス: 満足度→売上転換ボーナス（デジタル会員証等）
+                        if (c.id === 'player' && p._digitalEffects && p._digitalEffects.satToSaleBonus > 0) {
+                            let _satMult = ((s.satisfaction || 60) / 100) * p._digitalEffects.satToSaleBonus;
+                            rev = Math.floor(rev * (1 + _satMult));
+                        }
                         let baseSalary = 50000 * s.staffCount; if (s.hasManager && s.managerData) baseSalary += s.managerData.baseSalary;
                         if (c.id === 'player') {
                             // stats[1] 運営★ → 人件費削減（★5で-10%）
                             let _opsStat = s.hasManager && s.managerData?.stats ? s.managerData.stats[1] : 0;
                             let _opsDisc = 1 - _opsStat * 0.02;
                             baseSalary = Math.floor(baseSalary * syn.hrCost * infraHrDiscount * _opsDisc);
+                            // デジタルサービス: ロボットバリスタ等の人件費削減
+                            if (p._digitalEffects && p._digitalEffects.hrCostReduction > 0) {
+                                baseSalary = Math.floor(baseSalary * (1 - p._digitalEffects.hrCostReduction));
+                            }
                         }
                         // 🧾 材料費（原価率: デフォルト28%、焙煎機ランクで低下）
                         let rd_cost = c.id === 'player' ? (roasterDefs.find(r => r.id === (p.roasterEquip || {}).id) || roasterDefs[0]) : roasterDefs[0];
@@ -5705,6 +5763,117 @@
                         let _sw = Math.max(0, week - 2);
                         let thisWeekStr = `${2020 + Math.floor(_sw / 48)}年 ${Math.floor((_sw % 48) / 4) + 1}月 ${(_sw % 4) + 1}週`;
                         setTimeout(() => { if (typeof showWeeklyNewsScreen === 'function') showWeeklyNewsScreen(thisWeekStr); }, 100);
+                    }
+                });
+            }
+            // 📊 子会社パフォーマンスレポート
+            if (!isGameOver) {
+                let playerSubs = companies.filter(c => c.parent === 'player' && !c.isBankrupt && c.id !== 'player');
+                if (playerSubs.length > 0) {
+                    // 毎月（4週ごと）: グループ全体サマリー
+                    if (week % 4 === 0) {
+                        let totalSubProfit = playerSubs.reduce((s, c) => s + (c.qNet || 0), 0);
+                        let profitSubs = playerSubs.filter(c => (c.qNet || 0) > 0);
+                        let lossSubs = playerSubs.filter(c => (c.qNet || 0) < 0);
+                        let sign = totalSubProfit >= 0 ? '+' : '';
+                        addLog(`【グループ月報】子会社${playerSubs.length}社 合計損益: ${sign}¥${Math.floor(totalSubProfit / 10000).toLocaleString()}万（黒字${profitSubs.length}社 / 赤字${lossSubs.length}社）`, totalSubProfit >= 0 ? 'success' : 'warning', 'M&A');
+                    }
+                    // 毎週: 大きな赤字の子会社を警告
+                    playerSubs.forEach(sub => {
+                        if ((sub.qNet || 0) < -50000000) {
+                            addLog(`【子会社赤字】${sub.name.replace(/\[.*?\]\s*/g, '')} が ¥${Math.floor(Math.abs(sub.qNet) / 10000).toLocaleString()}万 の赤字。資金援助か吸収合併を検討してください。`, 'warning', 'M&A');
+                        }
+                        // 子会社が大きな利益を出した場合
+                        if ((sub.qNet || 0) > 200000000 && week % 4 === 0) {
+                            addLog(`【子会社好調】${sub.name.replace(/\[.*?\]\s*/g, '')} が ¥${Math.floor(sub.qNet / 10000).toLocaleString()}万 の利益を計上。`, 'success', 'M&A');
+                        }
+                    });
+                }
+            }
+            // 📰 多様なニュース生成（業界動向・競合・達成・市場分析）
+            if (!isGameOver) {
+                let p = companies[0];
+                let coffeeCos = companies.filter(c => c.sector === 'coffee' && !c.isBankrupt && c.id !== 'player');
+                let allCos = companies.filter(c => !c.isBankrupt && c.id !== 'player');
+
+                // ── 業界ランキング変動（4週ごと）──
+                if (week % 4 === 0 && coffeeCos.length > 0) {
+                    let ranked = [p, ...coffeeCos].sort((a, b) => (b.marketCap || 0) - (a.marketCap || 0));
+                    let playerRank = ranked.findIndex(c => c.id === 'player') + 1;
+                    let topCo = ranked[0];
+                    if (playerRank === 1) {
+                        addLog(`【業界首位】${p.name} がコーヒー業界の時価総額ランキングで首位を維持！`, 'success', '経済', 3);
+                    } else if (playerRank <= 3) {
+                        addLog(`【業界動向】コーヒー業界時価総額ランキング: 首位は ${topCo.name.replace(/\[.*?\]\s*/, '')}。${p.name} は${playerRank}位。`, 'news', '経済', 2);
+                    }
+                }
+
+                // ── 競合の急成長・急落（毎週10%確率）──
+                if (Math.random() < 0.10) {
+                    let growthCo = coffeeCos.filter(c => c.prevStockPrice && c.stockPrice > c.prevStockPrice * 1.15);
+                    if (growthCo.length > 0) {
+                        let g = growthCo[Math.floor(Math.random() * growthCo.length)];
+                        let pct = ((g.stockPrice / g.prevStockPrice - 1) * 100).toFixed(0);
+                        addLog(`【競合好調】${g.name.replace(/\[.*?\]\s*/, '')} の株価が前週比+${pct}%と急騰。業績拡大の期待が高まる。`, 'news', '競合', 2);
+                    }
+                    let dropCo = coffeeCos.filter(c => c.prevStockPrice && c.stockPrice < c.prevStockPrice * 0.85);
+                    if (dropCo.length > 0) {
+                        let d = dropCo[Math.floor(Math.random() * dropCo.length)];
+                        let pct = ((1 - d.stockPrice / d.prevStockPrice) * 100).toFixed(0);
+                        addLog(`【競合苦境】${d.name.replace(/\[.*?\]\s*/, '')} の株価が前週比-${pct}%と急落。買収のチャンスか？`, 'news', '競合', 2);
+                    }
+                }
+
+                // ── 競合が大量出店（8週ごと）──
+                if (week % 8 === 0) {
+                    coffeeCos.forEach(rival => {
+                        if (rival.stores.length >= 10 && rival.stores.length > p.stores.length) {
+                            addLog(`【競合拡大】${rival.name.replace(/\[.*?\]\s*/, '')} が${rival.stores.length}店舗に拡大。自社(${p.stores.length}店舗)を上回る勢い。`, 'warning', '競合', 3);
+                        }
+                    });
+                }
+
+                // ── プレイヤーのマイルストーン達成 ──
+                let milestones = [
+                    { key: '_mile_mc1b', cond: p.marketCap >= 1e9, msg: '時価総額10億円を突破しました！' },
+                    { key: '_mile_mc10b', cond: p.marketCap >= 1e10, msg: '時価総額100億円を突破！業界有数の大企業に成長。' },
+                    { key: '_mile_mc100b', cond: p.marketCap >= 1e11, msg: '時価総額1,000億円を達成！コーヒー界の巨人へ。' },
+                    { key: '_mile_mc1t', cond: p.marketCap >= 1e12, msg: '時価総額1兆円！グローバル・コーヒー帝国の誕生。' },
+                    { key: '_mile_st5', cond: p.stores.length >= 5, msg: '5店舗達成！チェーン展開が軌道に乗り始めた。' },
+                    { key: '_mile_st20', cond: p.stores.length >= 20, msg: '20店舗達成！地域を代表するコーヒーチェーンに。' },
+                    { key: '_mile_st50', cond: p.stores.length >= 50, msg: '50店舗達成！全国区のブランドとして認知度が急上昇。' },
+                    { key: '_mile_sub3', cond: companies.filter(c => c.parent === 'player' && !c.isBankrupt).length >= 3, msg: '子会社3社体制！コングロマリット経営が本格化。' },
+                    { key: '_mile_cash10b', cond: p.cash >= 1e10, msg: '手元資金100億円を確保。巨額M&Aが射程圏内に。' },
+                ];
+                milestones.forEach(m => {
+                    if (m.cond && !p[m.key]) {
+                        p[m.key] = true;
+                        addLog(`【達成】${m.msg}`, 'success', '自社', 4);
+                    }
+                });
+
+                // ── 市場全体の動向コメント（12週ごと）──
+                if (week % 12 === 0) {
+                    let avgChange = allCos.reduce((s, c) => s + (c.prevStockPrice ? (c.stockPrice / c.prevStockPrice - 1) : 0), 0) / Math.max(1, allCos.length);
+                    if (avgChange > 0.05) {
+                        addLog(`【市場分析】全体的な株高傾向が続く。平均株価変動率+${(avgChange * 100).toFixed(1)}%。投資チャンスの見極めが重要。`, 'news', '経済', 2);
+                    } else if (avgChange < -0.05) {
+                        addLog(`【市場分析】市場全体に売りが先行。平均株価変動率${(avgChange * 100).toFixed(1)}%。割安銘柄の買い集めに好機か。`, 'news', '経済', 2);
+                    }
+                }
+
+                // ── 大型M&Aの業界影響（AI企業間の買収があった場合）──
+                allCos.forEach(c => {
+                    if (c.parent && !c._newsedParent) {
+                        let parent = companies.find(x => x.id === c.parent);
+                        if (parent && parent.id !== 'player') {
+                            let cN = c.name.replace(/\[.*?\]\s*/g, '');
+                            let pN = parent.name.replace(/\[.*?\]\s*/g, '');
+                            if (c.sector === 'coffee') {
+                                addLog(`【業界再編】${pN} による ${cN} の傘下入りで、コーヒー業界の勢力図が変動。`, 'news', '競合', 3);
+                            }
+                            c._newsedParent = true;
+                        }
                     }
                 });
             }
@@ -9275,10 +9444,8 @@ ${ds.desc}`)) {
                 filteredLogs = allLogs.filter(l => l.category === window.currentNewsCategory);
             }
             filteredLogs = filteredLogs.slice(0, 80);
-            // M&A/買収系のalertを先頭に集約（それ以外は時系列維持）
-            let _topPriority = filteredLogs.filter(l => l.type === 'alert' && (l.category === 'M&A' || l.msg.includes('TOB') || l.msg.includes('買収')));
-            let _rest = filteredLogs.filter(l => !_topPriority.includes(l));
-            filteredLogs = [..._topPriority, ..._rest];
+            // 優先度でソート（高い順、同priority内は時系列維持）
+            filteredLogs.sort((a, b) => (b.priority || 1) - (a.priority || 1));
 
             // カテゴリタブ
             let tabsHtml = `<div style="display:flex;gap:4px;overflow-x:auto;padding-bottom:2px;margin-bottom:16px;scrollbar-width:none;">`;
@@ -9301,8 +9468,11 @@ ${ds.desc}`)) {
                 filteredLogs.forEach((log) => {
                     let cfg = typeConfig2[log.type] || typeConfig2['normal'];
                     let icon = catIcon[log.category] || '📰';
+                    let priBadge = '';
+                    if ((log.priority || 1) >= 5) priBadge = '<span style="background:#dc2626;color:#fff;font-size:8px;font-weight:900;padding:2px 6px;border-radius:999px;animation:pulseBanner 1s infinite;">速報</span>';
+                    else if ((log.priority || 1) >= 4) priBadge = '<span style="background:#f59e0b;color:#fff;font-size:8px;font-weight:900;padding:2px 6px;border-radius:999px;">重要</span>';
                     cardsHtml += `
-                    <div style="background:${cfg.bg};border:1px solid ${cfg.border};border-radius:12px;padding:14px 16px;margin-bottom:10px;">
+                    <div style="background:${cfg.bg};border:1px solid ${cfg.border};border-radius:12px;padding:14px 16px;margin-bottom:10px;${(log.priority || 1) >= 5 ? 'border-left:4px solid #dc2626;' : (log.priority || 1) >= 4 ? 'border-left:4px solid #f59e0b;' : ''}">
                         <div style="display:flex;gap:10px;align-items:flex-start;">
                             <div style="width:36px;height:36px;border-radius:9px;flex-shrink:0;
                                 background:#fff;border:1px solid ${cfg.border};
@@ -9311,6 +9481,7 @@ ${ds.desc}`)) {
                                 <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-wrap:wrap;">
                                     <span style="background:${cfg.badge};color:#fff;font-size:9px;font-weight:800;
                                         padding:2px 8px;border-radius:999px;">${log.category}</span>
+                                    ${priBadge}
                                     <span style="font-size:10px;color:#94a3b8;">${log.week}</span>
                                 </div>
                                 <div style="font-size:13px;font-weight:600;color:#1e293b;line-height:1.5;">${log.msg}</div>
