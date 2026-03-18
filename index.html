@@ -5587,6 +5587,10 @@
                     // AI同士の場合はログのみ（モーダル表示なし）
                     let t = knightEvent.target, k = knightEvent.knight;
                     t.activeTOB_v2 = null;
+                    // 55%株式付与（救済買収と同じ）
+                    let _wnShares = Math.ceil((t.shares || 10000) * 0.55);
+                    for (let _sid in t.shareholders) { t.shareholders[_sid] = Math.floor((t.shareholders[_sid] || 0) * 0.45); }
+                    t.shareholders[k.id] = _wnShares;
                     t.parent = k.id;
                     t.name = `[${k.name.replace(/\[.*?\]\s*/g,'')}傘下] ${t.name.replace(/\[.*?\]\s*/g,'')}`;
                     addLog(`【買収防衛】${t.name.replace(/\[.*?\]\s*/g,'')} がホワイトナイト ${k.name.replace(/\[.*?\]\s*/g,'')} に救済合併。買収阻止。`, 'news', 'M&A');
@@ -9934,11 +9938,11 @@ ${ds.desc}`)) {
             if (!gs) return;
             let oldParent = companies.find(c => c.id === gs.parent);
             if (!confirm(`【直接子会社化】${gs.name.replace(/\[.*?\]\s*/g, '')} を\n${oldParent ? oldParent.name.replace(/\[.*?\]\s*/g, '') : '?'}から切り離し、直接自社傘下にしますか？`)) return;
-            // 旧親の株式も引き継ぐ
-            if (oldParent && (oldParent.shareholders || {})[gsId] > 0) {
-                let inheritShares = oldParent.shareholders[gsId];
+            // 旧親の株式を引き継ぐ（旧親が孫に持ってる株 → プレイヤーへ）
+            if (oldParent && (gs.shareholders[oldParent.id] || 0) > 0) {
+                let inheritShares = gs.shareholders[oldParent.id];
                 gs.shareholders['player'] = (gs.shareholders['player'] || 0) + inheritShares;
-                oldParent.shareholders[gsId] = 0;
+                delete gs.shareholders[oldParent.id];
             }
             gs.parent = 'player';
             gs.name = '[自社傘下] ' + gs.name.replace(/\[.*?\]\s*/g, '');
@@ -12814,7 +12818,10 @@ ${ds.desc}`)) {
             }
             if (!fightBack) {
                 t.activeTOB_v2.bidder = knightId; t.activeTOB_v2.price = counterPrice; t.stockPrice = counterPrice;
-                // TOB完了: ホワイトナイトが対象を買収
+                // TOB完了: ホワイトナイトが対象を買収（55%付与）
+                let _wnShares2 = Math.ceil((t.shares || 10000) * 0.55);
+                for (let _sid in t.shareholders) { t.shareholders[_sid] = Math.floor((t.shareholders[_sid] || 0) * 0.45); }
+                t.shareholders[k.id] = _wnShares2;
                 t.parent = k.id;
                 t.name = `[${k.name.replace(/\[.*?\]\s*/, '')}傘下] ${t.name.replace(/\[.*?\]\s*/, '')}`;
                 addLog(`【買収防衛】${t.name.replace(/\[.*?\]\s*/, '')}、友好企業 ${k.name.replace(/\[.*?\]\s*/, '')} に救済合併を要請。ホワイトナイトの対抗TOBにより買収計画が阻止された。`, 'alert', 'M&A');
