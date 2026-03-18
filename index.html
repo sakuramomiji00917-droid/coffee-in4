@@ -4331,26 +4331,6 @@
 
                     let targets = companies.filter(t => t.id !== c.id && t.isPublic && !t.isBankrupt && t.parent !== c.id);
                     if (targets.length > 0) {
-                        // AI企業: TOB発動直前のみ預金の一部を引き出し（銀行保護付き）
-                        if (c.id !== 'player' && c.deposits && (isSecurities || sameIndustry || verticalIntegration)) {
-                            let _totalDep = Object.values(c.deposits).reduce((s, v) => s + v, 0);
-                            if (_totalDep > 0 && c.cash < target.marketCap * 0.3) {
-                                let _withdraw = Math.floor(_totalDep * 0.20); // 最大20%
-                                for (let bId in c.deposits) {
-                                    let _bank = companies.find(b => b.id === bId);
-                                    if (!_bank || _bank.isBankrupt) continue;
-                                    // 銀行cashの15%まで、かつ銀行cash1億を下回らない
-                                    let _bankLimit = Math.max(0, Math.floor(_bank.cash * 0.15) - 100000000);
-                                    if (_bankLimit <= 0) continue;
-                                    let _take = Math.min(c.deposits[bId], Math.floor(c.deposits[bId] / _totalDep * _withdraw), _bankLimit);
-                                    if (_take > 0) {
-                                        c.deposits[bId] -= _take;
-                                        c.cash += _take;
-                                        _bank.cash -= _take;
-                                    }
-                                }
-                            }
-                        }
                         // ランダムではなく、利益成長している・時価総額が大きい等、優良企業を優先してターゲットにする
                         targets.sort((a, b) => {
                             let scoreA = (a.qNet || 0) / 1000 + (a.marketCap || 0) / 100000 + Math.random() * 50000;
@@ -4364,6 +4344,22 @@
                         const sameIndustry = (c.sector === target.sector) || (c.sector === 'coffee' && target.sector === 'food') || (c.sector === 'food' && target.sector === 'coffee');
                         const verticalIntegration = (target.sector === 'semiconductor') && (c.sector === 'auto' || c.sector === 'space');
                         let currentShares = target.shareholders[c.id] || 0;
+
+                        // AI企業: TOB発動直前のみ預金の一部を引き出し（銀行保護付き）
+                        if (c.id !== 'player' && c.deposits && (isSecurities || sameIndustry || verticalIntegration)) {
+                            let _totalDep = Object.values(c.deposits).reduce((s, v) => s + v, 0);
+                            if (_totalDep > 0 && c.cash < target.marketCap * 0.3) {
+                                let _withdraw = Math.floor(_totalDep * 0.20);
+                                for (let bId in c.deposits) {
+                                    let _bank = companies.find(b => b.id === bId);
+                                    if (!_bank || _bank.isBankrupt) continue;
+                                    let _bankLimit = Math.max(0, Math.floor(_bank.cash * 0.15) - 100000000);
+                                    if (_bankLimit <= 0) continue;
+                                    let _take = Math.min(c.deposits[bId], Math.floor(c.deposits[bId] / _totalDep * _withdraw), _bankLimit);
+                                    if (_take > 0) { c.deposits[bId] -= _take; c.cash += _take; _bank.cash -= _take; }
+                                }
+                            }
+                        }
 
                         if (isSecurities || sameIndustry || verticalIntegration) {
                             // TOBクールダウン: 前回TOBから16週未満は発動しない
