@@ -999,6 +999,8 @@
         // 金庫株ヘルパー: 浮動株数（金庫株・自己株を除いた実質流通株）
         window.getFloatShares = function(co) {
             let treasury = (co.shareholders && co.shareholders[co.id]) || 0;
+            // プレイヤー企業は別管理の金庫株も除外
+            if (co.id === 'player') treasury += (co._treasuryShares || 0);
             return Math.max(0, co.shares - treasury);
         };
         // 市場流通株（誰にも名義登録されていない株）を動的に計算
@@ -1905,7 +1907,8 @@
                 let reduce = Math.floor(actualBuy * share);
                 p.shareholders[k] = Math.max(0, (p.shareholders[k] || 0) - reduce);
             });
-            p.shareholders['player'] = (p.shareholders['player'] || 0) + actualBuy;
+            // 買い戻した株は金庫株として保管（個人持株と分離）
+            p._treasuryShares = (p._treasuryShares || 0) + actualBuy;
             p.cash -= cost;
             addLog(`【防衛】自社株買い実施。${actualBuy.toLocaleString()}株(5%)を ¥${Math.floor(cost / 10000).toLocaleString()}万 で買い戻しました。`, 'success', 'M&A');
             if (modalId) { let m = document.getElementById(modalId); if (m) m.remove(); }
@@ -1920,7 +1923,8 @@
             if (!confirm('新株を30%増発します。外部保有率は下がりますが、株価も一時下落します。実行しますか？')) return;
             let newShares = Math.floor(p.shares * 0.30);
             p.shares += newShares;
-            p.shareholders['player'] = (p.shareholders['player'] || 0) + newShares;
+            // 新株は金庫株として保管（個人持株と分離）
+            p._treasuryShares = (p._treasuryShares || 0) + newShares;
             p.cash -= 30000000;
             p.stockPrice = Math.floor(p.stockPrice * 0.82); // 株価-18%
             p.marketCap = p.stockPrice * p.shares;
@@ -4327,6 +4331,22 @@
 
                     let targets = companies.filter(t => t.id !== c.id && t.isPublic && !t.isBankrupt && t.parent !== c.id);
                     if (targets.length > 0) {
+                        // AI企業: M&A判断前に預金の50%を引き出して戦資金化
+                        if (c.id !== 'player' && c.deposits) {
+                            let _totalDep = Object.values(c.deposits).reduce((s, v) => s + v, 0);
+                            if (_totalDep > 0) {
+                                let _withdraw = Math.floor(_totalDep * 0.5);
+                                for (let bId in c.deposits) {
+                                    let _take = Math.min(c.deposits[bId], Math.floor(c.deposits[bId] / _totalDep * _withdraw));
+                                    if (_take > 0) {
+                                        c.deposits[bId] -= _take;
+                                        c.cash += _take;
+                                        let _bank = companies.find(b => b.id === bId);
+                                        if (_bank) _bank.cash -= _take;
+                                    }
+                                }
+                            }
+                        }
                         // ランダムではなく、利益成長している・時価総額が大きい等、優良企業を優先してターゲットにする
                         targets.sort((a, b) => {
                             let scoreA = (a.qNet || 0) / 1000 + (a.marketCap || 0) / 100000 + Math.random() * 50000;
@@ -8254,6 +8274,17 @@ ${ds.desc}`)) {
                             💰 調達額: <b class="text-success">¥${Math.floor(p.shares * 0.1 * p.stockPrice * 0.9).toLocaleString()}</b>　　📉 株価: <b>¥${p.stockPrice.toLocaleString()}</b> → <b class="text-danger">¥${Math.floor(p.stockPrice * 0.94).toLocaleString()}</b>
                         </div>
                     </div>`}
+                    ${p.isPublic && p.stockPrice >= 5000 ? `<div class="card" style="grid-column: 1 / -1;"><div class="card-header">✂️ 株式分割</div>
+                        <div style="font-size:12px;color:var(--text-mut);margin-bottom:10px;line-height:1.7;">
+                            株価を下げて流動性を高めます。時価総額は変わりません。株価¥5,000以上で実行可能。
+                        </div>
+                        <div style="font-size:13px;font-weight:900;margin-bottom:10px;">現在の株価: ¥${p.stockPrice.toLocaleString()} / 発行済: ${p.shares.toLocaleString()}株</div>
+                        <div style="display:flex;gap:8px;">
+                            ${[2, 3, 5, 10].filter(r => p.stockPrice / r >= 500).map(r => `<button class="btn-outline" style="flex:1;padding:10px;font-weight:900;" onclick="executeStockSplit(${r})">
+                                ${r}分割<br><span style="font-size:10px;color:var(--text-mut);">→¥${Math.floor(p.stockPrice/r).toLocaleString()}</span>
+                            </button>`).join('')}
+                        </div>
+                    </div>` : ''}
                 </div>
                 </div>
                 <div style="display:${window._finTab === 'portfolio' ? 'block' : 'none'}">
@@ -8828,6 +8859,32 @@ ${ds.desc}`)) {
             }
             updateDashboard(); renderPortfolio();
         };
+        // ✂️ 株式分割
+        window.executeStockSplit = function (ratio) {
+            let p = companies[0];
+            if (!p.isPublic) return alert('上場企業のみ株式分割が可能です。');
+            if (p.stockPrice < 5000) return alert('株価¥5,000以上で実行可能です。');
+            let newPrice = Math.floor(p.stockPrice / ratio);
+            if (newPrice < 500) return alert('分割後の株価が¥500未満になるため実行できません。');
+            if (!confirm(`【株式分割】${ratio}分割を実行しますか？\n\n株価: ¥${p.stockPrice.toLocaleString()} → ¥${newPrice.toLocaleString()}\n発行済株数: ${p.shares.toLocaleString()} → ${(p.shares * ratio).toLocaleString()}\n※ 時価総額は変わりません`)) return;
+
+            let oldPrice = p.stockPrice;
+            p.shares = Math.floor(p.shares * ratio);
+            p.stockPrice = newPrice;
+            // 全株主の持株数を分割比率で調整
+            for (let sid in p.shareholders) {
+                if (p.shareholders[sid] > 0) {
+                    p.shareholders[sid] = Math.floor(p.shareholders[sid] * ratio);
+                }
+            }
+            // 金庫株も調整
+            if (p._treasuryShares) p._treasuryShares = Math.floor(p._treasuryShares * ratio);
+            // playerTotalCostは変えない（1株あたり取得単価が自動で下がる）
+
+            addLog(`【株式分割】自社株を${ratio}分割実施。株価: ¥${oldPrice.toLocaleString()} → ¥${newPrice.toLocaleString()} / 発行済: ${p.shares.toLocaleString()}株`, 'success', '自社', 4);
+            updateDashboard(); renderPortfolio();
+        };
+
         window.executePlayerDilution = function () {
             let p = companies[0], ratio = parseInt(document.getElementById('dilution-range').value);
             if (confirm(`${ratio}% の新株を発行しますか？株価は下がります。`)) { executeCompanyDilution(p, ratio); renderPortfolio(); updateDashboard(); }
@@ -8962,7 +9019,7 @@ ${ds.desc}`)) {
                         return { n: label, v: sel.shareholders[hid], isTreasury: hid === sel.id };
                     })
                     .sort((a, b) => b.v - a.v)[0];
-                let mainHolder = topHolder ? `${topHolder.n} (${topHolder.isTreasury ? ((topHolder.v / sel.shares) * 100).toFixed(1) : (_selFloat > 0 ? ((topHolder.v / _selFloat) * 100).toFixed(1) : '0')}%)` : '浮動株多数';
+                let mainHolder = topHolder ? `${topHolder.n} (${sel.shares > 0 ? ((topHolder.v / sel.shares) * 100).toFixed(1) : '0'}%)` : '浮動株多数';
                 let o = sel.shareholders['player'] || 0;
                 let pVal = o > 0 ? sel.stockPrice * o - (sel.playerTotalCost || 0) : 0;
                 let badge = window.getCountryBadge ? window.getCountryBadge(sel.country) : sel.country;
@@ -9054,10 +9111,14 @@ ${ds.desc}`)) {
                         return { n: label, v: c.shareholders[hid], color: hid === c.id ? '#6366f1' : (co?.color || '#94a3b8') };
                     })
                     .sort((a, b) => b.v - a.v).slice(0, 5);
+                // プレイヤー企業の金庫株は別管理なので追加
+                if (c.id === 'player' && (c._treasuryShares || 0) > 0) {
+                    holders.push({ n: '🏦金庫株', v: c._treasuryShares, color: '#6366f1' });
+                }
                 let _cFloat = window.getFloatShares(c);
                 let holderBadges = holders.map(h => {
-                    // 金庫株は総発行済ベースで表示、それ以外は浮動株ベース（議決権ベース）
-                    let pct = h.n === '🏦金庫株' ? ((h.v / c.shares) * 100).toFixed(0) : (_cFloat > 0 ? ((h.v / _cFloat) * 100).toFixed(0) : '0');
+                    // 全て発行済み株数ベースで統一表示（100%に収まる）
+                    let pct = c.shares > 0 ? ((h.v / c.shares) * 100).toFixed(0) : '0';
                     return `<span style="background:${h.color}22;color:${h.color};border:1px solid ${h.color}55;padding:1px 5px;border-radius:4px;font-size:9px;font-weight:900;margin-right:3px;margin-bottom:2px;display:inline-block;">${h.n} ${pct}%</span>`;
                 }).join('');
 
