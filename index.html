@@ -4331,18 +4331,22 @@
 
                     let targets = companies.filter(t => t.id !== c.id && t.isPublic && !t.isBankrupt && t.parent !== c.id);
                     if (targets.length > 0) {
-                        // AI企業: M&A判断前に預金の50%を引き出して戦資金化
-                        if (c.id !== 'player' && c.deposits) {
+                        // AI企業: TOB発動直前のみ預金の一部を引き出し（銀行保護付き）
+                        if (c.id !== 'player' && c.deposits && (isSecurities || sameIndustry || verticalIntegration)) {
                             let _totalDep = Object.values(c.deposits).reduce((s, v) => s + v, 0);
-                            if (_totalDep > 0) {
-                                let _withdraw = Math.floor(_totalDep * 0.5);
+                            if (_totalDep > 0 && c.cash < target.marketCap * 0.3) {
+                                let _withdraw = Math.floor(_totalDep * 0.20); // 最大20%
                                 for (let bId in c.deposits) {
-                                    let _take = Math.min(c.deposits[bId], Math.floor(c.deposits[bId] / _totalDep * _withdraw));
+                                    let _bank = companies.find(b => b.id === bId);
+                                    if (!_bank || _bank.isBankrupt) continue;
+                                    // 銀行cashの15%まで、かつ銀行cash1億を下回らない
+                                    let _bankLimit = Math.max(0, Math.floor(_bank.cash * 0.15) - 100000000);
+                                    if (_bankLimit <= 0) continue;
+                                    let _take = Math.min(c.deposits[bId], Math.floor(c.deposits[bId] / _totalDep * _withdraw), _bankLimit);
                                     if (_take > 0) {
                                         c.deposits[bId] -= _take;
                                         c.cash += _take;
-                                        let _bank = companies.find(b => b.id === bId);
-                                        if (_bank) _bank.cash -= _take;
+                                        _bank.cash -= _take;
                                     }
                                 }
                             }
@@ -6143,8 +6147,8 @@
                         if (hc.id === 'player' || hc.isBankrupt || !(hc.shareholders['player'] > 0)) return;
                         if (hc.prevStockPrice && hc.prevStockPrice > 0) {
                             let _hcChg = (hc.stockPrice / hc.prevStockPrice - 1) * 100;
-                            if (_hcChg <= -15) addLog(`【保有銘柄急落】${hc.name.replace(/\[.*?\]\s*/g,'')} が前週比${_hcChg.toFixed(0)}%の急落。売却を検討？`, 'alert', 'M&A', 4);
-                            else if (_hcChg >= 15) addLog(`【保有銘柄急騰】${hc.name.replace(/\[.*?\]\s*/g,'')} が前週比+${_hcChg.toFixed(0)}%の急騰！利確のチャンス。`, 'success', 'M&A', 3);
+                            if (_hcChg <= -15) addLog(`【保有銘柄急落】${hc.name.replace(/\[.*?\]\s*/g,'')} が前週比${_hcChg.toFixed(0)}%の急落。売却を検討？`, 'alert', '自社', 4);
+                            else if (_hcChg >= 15) addLog(`【保有銘柄急騰】${hc.name.replace(/\[.*?\]\s*/g,'')} が前週比+${_hcChg.toFixed(0)}%の急騰！利確のチャンス。`, 'success', '自社', 3);
                         }
                     });
                 }
@@ -9400,12 +9404,12 @@ ${ds.desc}`)) {
                 c.playerTotalCost += cost;
                 let _cName = c.name.replace(/\[.*?\]\s*/, '');
                 let _newPct = (newRatio * 100).toFixed(1);
-                addLog(`【株式取得】${_cName} を ${a.toLocaleString()}株 購入（¥${Math.floor(cost / 10000).toLocaleString()}万）→ 保有${_newPct}%`, 'success', 'M&A', 3);
+                addLog(`【株式取得】${_cName} を ${a.toLocaleString()}株 購入（¥${Math.floor(cost / 10000).toLocaleString()}万）→ 保有${_newPct}%`, 'success', '自社', 3);
                 // マイルストーン通知
-                if (oldRatio < 0.05 && newRatio >= 0.05) addLog(`【大量保有報告】${_cName} の株式5%を突破。大量保有報告義務が発生しました。`, 'news', 'M&A', 4);
-                if (oldRatio < 0.10 && newRatio >= 0.10) addLog(`【主要株主】${_cName} の株式10%を取得。主要株主として登録されます。`, 'alert', 'M&A', 4);
-                if (oldRatio < 0.20 && newRatio >= 0.20) addLog(`【筆頭株主】${_cName} の株式20%を取得！持分法適用関連会社化。経営への影響力が増大します。`, 'alert', 'M&A', 5);
-                if (oldRatio < 0.33 && newRatio >= 0.33) addLog(`【拒否権取得】${_cName} の株式1/3超を取得！重要事項の拒否権を獲得しました。TOBで過半数取得を目指しましょう。`, 'alert', 'M&A', 5);
+                if (oldRatio < 0.05 && newRatio >= 0.05) addLog(`【大量保有報告】${_cName} の株式5%を突破。大量保有報告義務が発生しました。`, 'news', '自社', 4);
+                if (oldRatio < 0.10 && newRatio >= 0.10) addLog(`【主要株主】${_cName} の株式10%を取得。主要株主として登録されます。`, 'alert', '自社', 4);
+                if (oldRatio < 0.20 && newRatio >= 0.20) addLog(`【筆頭株主】${_cName} の株式20%を取得！持分法適用関連会社化。経営への影響力が増大します。`, 'alert', '自社', 5);
+                if (oldRatio < 0.33 && newRatio >= 0.33) addLog(`【拒否権取得】${_cName} の株式1/3超を取得！重要事項の拒否権を獲得しました。TOBで過半数取得を目指しましょう。`, 'alert', '自社', 5);
             } else {
                 let o = c.shareholders['player'] || 0; if (o < a) return alert("保有株数が不足しています。");
                 let profitPerShare = c.stockPrice - (c.playerTotalCost / o);
@@ -9419,7 +9423,7 @@ ${ds.desc}`)) {
                 if (c.shareholders['player'] === 0) c.playerTotalCost = 0;
                 let _cName2 = c.name.replace(/\[.*?\]\s*/, '');
                 let _profSign = totalProfit >= 0 ? '+' : '';
-                addLog(`【株式売却】${_cName2} ${a.toLocaleString()}株 売却（売却益 ${_profSign}¥${Math.floor(totalProfit / 10000).toLocaleString()}万）`, totalProfit >= 0 ? 'success' : 'warning', 'M&A', 3);
+                addLog(`【株式売却】${_cName2} ${a.toLocaleString()}株 売却（売却益 ${_profSign}¥${Math.floor(totalProfit / 10000).toLocaleString()}万）`, totalProfit >= 0 ? 'success' : 'warning', '自社', 3);
             }
             closeModal('trade-modal'); updateDashboard(); renderPortfolio();
         };
@@ -9462,13 +9466,13 @@ ${ds.desc}`)) {
                 // 新株発行により株価が下がる
                 c.stockPrice = Math.max(10, Math.floor(c.marketCap / c.shares));
 
-                addLog(`【DES実行】債権を株式に転換し、${c.name.replace(/\[.*?\]\s*/, '')} の株式 ${sharesToGet.toLocaleString()} 株を取得しました！`, 'alert', 'M&A', 5);
+                addLog(`【DES実行】債権を株式に転換し、${c.name.replace(/\[.*?\]\s*/, '')} の株式 ${sharesToGet.toLocaleString()} 株を取得しました！`, 'alert', '自社', 5);
 
                 // もし過半数を握ったら子会社化
                 if (window.getFloatPct(c, 'player') > 0.50) {
                     c.parent = 'player';
                     c.name = `[自社傘下] ${c.name.replace(/\[.*?\]\s*/, '')}`;
-                    addLog(`【支配】過半数の株式を取得し、${c.name.replace(/\[.*?\]\s*/, '')} を子会社化しました！`, 'success', 'M&A', 5);
+                    addLog(`【支配】過半数の株式を取得し、${c.name.replace(/\[.*?\]\s*/, '')} を子会社化しました！`, 'success', '自社', 5);
                 }
                 closeModal('trade-modal'); updateDashboard(); updateMarket();
             }
@@ -9782,7 +9786,7 @@ ${ds.desc}`)) {
             // 再建進捗を初期化
             cx._rebirthStartWeek = week;
             delete cx._bankruptProc; delete cx._bankruptProcWeek;
-            addLog(`【救済買収】${cName} をプレイヤーが救済買収しました！傘下として再建スタート（55%取得）。`, 'success', 'M&A', 5);
+            addLog(`【救済買収】${cName} をプレイヤーが救済買収しました！傘下として再建スタート（55%取得）。`, 'success', '自社', 5);
             updateDashboard();
             renderSubsidiaryList();
         };
@@ -12597,7 +12601,7 @@ ${ds.desc}`)) {
                     tc.parent = 'player';
                     let tgtN = tc.name.replace(/\[.*?\]\s*/g, '');
                     tc.name = '👑 [自社傘下] ' + tgtN;
-                    addLog('【TOB成功】' + tgtN + ' を子会社化しました！', 'success', 'M&A');
+                    addLog('【TOB成功】' + tgtN + ' を子会社化しました！', 'success', '自社', 5);
                     document.getElementById('tob-confirm-modal')?.remove();
                     updateDashboard(); return;
                 }
@@ -12664,7 +12668,7 @@ ${ds.desc}`)) {
                     }
                 }
                 if (_refusedNames.length > 0) {
-                    addLog(`【TOB抵抗】${_refusedNames.slice(0, 3).join('、')}${_refusedNames.length > 3 ? 'ら' : ''} が売却を拒否。プレミアムを上げれば応じる可能性があります。`, 'warning', 'M&A');
+                    addLog(`【TOB抵抗】${_refusedNames.slice(0, 3).join('、')}${_refusedNames.length > 3 ? 'ら' : ''} が売却を拒否。プレミアムを上げれば応じる可能性があります。`, 'warning', '自社');
                 }
 
                 // ── Step 3: 結果判定（浮動株ベース） ──
@@ -12673,9 +12677,9 @@ ${ds.desc}`)) {
                 if (finalPct > 0.50) {
                     tc.parent = 'player';
                     tc.name = '👑 [自社傘下] ' + tgtN;
-                    addLog(`【TOB成功】${tgtN} を子会社化しました！(${Math.floor(finalPct * 100)}%取得 / ${acquired.toLocaleString()}株取得)`, 'success', 'M&A', 5);
+                    addLog(`【TOB成功】${tgtN} を子会社化しました！(${Math.floor(finalPct * 100)}%取得 / ${acquired.toLocaleString()}株取得)`, 'success', '自社', 5);
                 } else {
-                    addLog(`【TOB部分成立】${tgtN} の取得は${Math.floor(finalPct * 100)}%止まり（${acquired.toLocaleString()}株取得）。追加TOBを検討してください。`, 'alert', 'M&A', 4);
+                    addLog(`【TOB部分成立】${tgtN} の取得は${Math.floor(finalPct * 100)}%止まり（${acquired.toLocaleString()}株取得）。追加TOBを検討してください。`, 'alert', '自社', 4);
                 }
                 document.getElementById('tob-confirm-modal')?.remove();
                 updateDashboard();
@@ -12686,7 +12690,7 @@ ${ds.desc}`)) {
             let data = window._tobConfirm;
             window._tobConfirm = null;
             let name = data ? (companies.find(x => x.id === data.targetId)?.name.replace(/\[.*?\]\s*/g,'') || '対象企業') : '対象企業';
-            addLog('【TOB撤退】' + name + ' への公開買付を取り下げました。', 'alert', 'M&A');
+            addLog('【TOB撤退】' + name + ' への公開買付を取り下げました。', 'alert', '自社');
             document.getElementById('tob-confirm-modal')?.remove();
             updateDashboard();
         };
