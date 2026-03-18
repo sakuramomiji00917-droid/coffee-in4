@@ -3563,32 +3563,32 @@
                                 if (_actions < _maxActions && _diagN.capacity < 40 && _missedRatio > 0.15) {
                                     s.staffCount = Math.min(10, (s.staffCount || 1) + 1);
                                     _actions++;
-                                    if (s.staffCount !== _oldStaff) addLog(`【店長判断】${s.name}: バイト増員 ${_oldStaff}→${s.staffCount}人（逃し客${Math.floor(_missedRatio*100)}%）`, 'news', '店舗', 2);
+                                    if (s.staffCount !== _oldStaff) { /* バイト増員実行 */ }
                                 }
                                 // 判断2: 人員過剰 → バイト減員
                                 if (_actions < _maxActions && _diagN.capacity > 85 && _capRatio < 0.4 && s.staffCount > 1) {
                                     s.staffCount = Math.max(1, s.staffCount - 1);
                                     _actions++;
-                                    if (s.staffCount !== _oldStaff) addLog(`【店長判断】${s.name}: バイト減員 ${_oldStaff}→${s.staffCount}人（人件費削減）`, 'news', '店舗', 2);
+                                    if (s.staffCount !== _oldStaff) { /* バイト減員実行 */ }
                                 }
                                 // 判断3: 価格が高すぎ → 値下げ
                                 if (_actions < _maxActions && _diagN.price < 35 && _priceRatio > 1.15 && s.satisfaction < 65) {
                                     let _cut = _priceStep * (1 + Math.floor((_priceRatio - 1.15) * 5));
                                     s.price = Math.max(300, (s.price || 1500) - _cut);
                                     _actions++;
-                                    if (s.price !== _oldPrice) addLog(`【店長判断】${s.name}: 値下げ ¥${_oldPrice.toLocaleString()}→¥${s.price.toLocaleString()}（競合平均¥${Math.floor(_areaAvgPrice).toLocaleString()}対比）`, 'news', '店舗', 2);
+                                    if (s.price !== _oldPrice) { /* 値下げ実行: 診断パネルで確認 */ }
                                 }
                                 // 判断4: 値上げ余地 → 値上げ
                                 if (_actions < _maxActions && _diagN.profit < 50 && s.satisfaction > 72 && _regRatio > 0.25 && _priceRatio < 1.20) {
                                     s.price = Math.min(3000, (s.price || 1500) + _priceStep);
                                     _actions++;
-                                    if (s.price !== _oldPrice) addLog(`【店長判断】${s.name}: 値上げ ¥${_oldPrice.toLocaleString()}→¥${s.price.toLocaleString()}（常連率${Math.floor(_regRatio*100)}%で安定）`, 'news', '店舗', 2);
+                                    if (s.price !== _oldPrice) { /* 値上げ実行: 診断パネルで確認 */ }
                                 }
                                 // ★4以上: 先読み判断（来週の逃し客増加を予測して先にバイト増員）
                                 if (_opsStar >= 4 && _actions < _maxActions && _missedRatio > 0.08 && _missedRatio <= 0.15 && s.staffCount < 10) {
                                     let _prevStaff = s.staffCount;
                                     s.staffCount = Math.min(10, s.staffCount + 1);
-                                    if (s.staffCount !== _prevStaff) addLog(`【店長先読み】${s.name}: 混雑予兆を察知し予防増員 ${_prevStaff}→${s.staffCount}人`, 'news', '店舗', 2);
+                                    if (s.staffCount !== _prevStaff) { /* 先読み増員実行 */ }
                                 }
                             }
                         }
