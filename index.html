@@ -1035,6 +1035,22 @@
             { type: "裏路地・隠れ家", trafficMult: 0.5, rentMult: 0.4, npcSlots: 0 }
         ];
 
+        const countryRegionMap = { 
+            'JP': ['TOKYO', 'OSAKA'], 
+            'USA': ['USA'], 
+            'CHINA': ['CHINA'], 
+            'UK': ['UK'], 
+            'KOREA': ['KOREA'], 
+            'AUS': ['AUSTRALIA'], 
+            'CAN': ['CANADA'], 
+            'FRA': ['FRANCE'], 
+            'GER': ['GERMANY'], 
+            'IND': ['INDIA'] 
+        };
+
+        // 🟢 DEBUG: 
+        console.log('Antigravity: Script initialization started.');
+
         // ==========================================
         // 🏗️ データ定義（世界238社 ＆ 国旗・国籍システム）
         // ==========================================
@@ -1163,22 +1179,146 @@
             let banks = companies.filter(c => c.sector === 'bank');
             companies.forEach(c => {
                 if (c.id === 'player') return;
+                
+                // 1. メインバンクの割り当て (約18%)
                 let localBanks = banks.filter(b => b.country === c.country);
                 let targetBanks = localBanks.length > 0 ? localBanks : banks;
                 if (targetBanks.length > 0 && c.sector !== 'bank') {
                     let bank = targetBanks[Math.floor(Math.random() * targetBanks.length)];
-                    let bankStake = Math.floor(c.shares * (0.03 + (Math.random() * 0.02)));
+                    let bankStake = Math.floor(c.shares * (0.15 + (Math.random() * 0.05))); // 15-20%
                     c.shareholders[bank.id] = bankStake;
                     c.mainBank = bank.id;
                 }
+
+                // 2. 提携企業（パートナー）の割り当て (計 約22%)
+                // 総計で40%程度になるように調整
                 let partners = companies.filter(p => p.id !== 'player' && p.id !== c.id && p.country === c.country).sort(() => 0.5 - Math.random()).slice(0, 2);
                 if (partners.length < 2) partners = companies.filter(p => p.id !== 'player' && p.id !== c.id).sort(() => 0.5 - Math.random()).slice(0, 2);
+                
                 partners.forEach(p => {
-                    let stake = Math.floor(c.shares * (0.01 + (Math.random() * 0.02)));
+                    let stake = Math.floor(c.shares * (0.10 + (Math.random() * 0.02))); // 10-12% each
                     c.shareholders[p.id] = (c.shareholders[p.id] || 0) + stake;
                 });
             });
         }
+
+        // ==========================================
+        // 💹 証券会社（ブローカー）システム
+        // ==========================================
+        // brokerTraitDefs は後続のブローカー登録システムセクションで定義
+
+        window.getBrokerTraits = function(co) {
+            if (!co || !co.brokerCoId) return { weeklyFee: 0.001, tobFee: 0.1, traits: [] };
+            let b = companies.find(cx => cx.id === co.brokerCoId);
+            if (!b) return { weeklyFee: 0.001, tobFee: 0.1, traits: [] };
+            
+            let rank = b.id.endsWith('_0') ? 0 : b.id.endsWith('_1') ? 1 : 2;
+            let baseFee = rank === 0 ? 0.0012 : rank === 1 ? 0.0010 : 0.0007;
+            let traits = b._brokerTraits || [];
+            
+            let finalWeekly = baseFee;
+            let finalTob = 0.10;
+            
+            if (traits.includes('discount')) { finalWeekly *= 0.5; finalTob *= 0.5; }
+            
+            return {
+                weeklyFee: finalWeekly,
+                tobFee: finalTob,
+                traits: traits
+            };
+        };
+
+        window.assignBroker = function(c) {
+            let sogoCos = companies.filter(cx => cx.sector === 'sogo' && !cx.isBankrupt);
+            if (sogoCos.length > 0) {
+                // 原則として母国の証券会社を割り当てる、なければランダム
+                let local = sogoCos.filter(b => b.country === c.country);
+                let target = local.length > 0 ? local[Math.floor(Math.random() * local.length)] : sogoCos[Math.floor(Math.random() * sogoCos.length)];
+                c.brokerCoId = target.id;
+            }
+        };
+
+        window.openBrokerSelectModal = function() {
+            let p = companies[0];
+            let brokers = companies.filter(c => c.sector === 'sogo' && !c.isBankrupt);
+            
+            let html = `
+                <div id="broker-select-modal" class="modal-overlay" style="display:flex; z-index:10005;">
+                    <div class="modal-content" style="max-width:600px; padding:30px; border-radius:16px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                            <h2 style="margin:0;">🏦 証券会社を選択</h2>
+                            <button class="close-btn" onclick="closeModal('broker-select-modal')">✕</button>
+                        </div>
+                        <p style="font-size:13px; color:var(--text-mut); line-height:1.6; margin-bottom:20px;">
+                            証券会社を変更すると、翌週から手数料や特典が適用されます。<br>
+                            変更には¥1,000万の手数料がかかり、48週間は再変更できません。
+                        </p>
+                        
+                        <div style="max-height:400px; overflow-y:auto; padding-right:5px;">
+                            ${brokers.map(b => {
+                                let traits = window.getBrokerTraits({ brokerCoId: b.id });
+                                let isCurrent = p.brokerCoId === b.id;
+                                let traitObjs = traits.traits.map(tid => brokerTraitDefs.find(d => d.id === tid)).filter(Boolean);
+                                
+                                return `
+                                    <div class="card" style="margin-bottom:12px; border:${isCurrent ? '2px solid var(--primary)' : '1px solid var(--border)'}; background:${isCurrent ? '#eff6ff' : '#fff'}; padding:16px; border-radius:12px; transition:all 0.2s;">
+                                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                                            <div>
+                                                <div style="font-weight:900; font-size:16px; display:flex; align-items:center; gap:8px;">
+                                                    ${countryFlags[b.country] || ''} ${b.name.replace(/\[.*?\]\s*/,'')}
+                                                </div>
+                                                <div style="font-size:11px; color:#64748b; margin-top:6px;">
+                                                    管理費: ${(traits.weeklyFee * 100).toFixed(2)}% | TOB手数料: ${(traits.tobFee * 100).toFixed(0)}%
+                                                </div>
+                                            </div>
+                                            <button class="btn-${isCurrent ? 'outline' : 'primary'}" 
+                                                onclick="changeBroker('${b.id}')" 
+                                                ${isCurrent ? 'disabled' : ''}
+                                                style="padding:8px 16px; font-size:12px; font-weight:900;">
+                                                ${isCurrent ? '適用中' : '選択する'}
+                                            </button>
+                                        </div>
+                                        <div style="display:flex; gap:6px; margin-top:12px;">
+                                            ${traitObjs.map(t => `<span style="font-size:10px; background:#fff; color:var(--primary); padding:2px 8px; border-radius:10px; border:1px solid #dbeafe; font-weight:700;">${t.icon} ${t.name}</span>`).join('') || '<span style="font-size:9px; color:#94a3b8;">特典なし</span>'}
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                        
+                        <button class="btn-dark" style="width:100%; margin-top:20px; border-radius:12px; padding:12px;" onclick="closeModal('broker-select-modal')">閉じる</button>
+                    </div>
+                </div>
+            `;
+            
+            document.getElementById('modals-area').insertAdjacentHTML('beforeend', html);
+        };
+
+        window.changeBroker = function(newBrokerId) {
+            let p = companies[0];
+            let cost = 10000000;
+            
+            // クールダウンチェック
+            let elapsed = week - (p.lastBrokerChangeWeek || 0);
+            if (elapsed < 48 && p.brokerCoId) {
+                return alert(`まだ変更できません。あと ${48 - elapsed}週 必要です。`);
+            }
+            
+            if (p.cash < cost) {
+                return alert('資金が不足しています。');
+            }
+            
+            if (!confirm(`証券会社を変更しますか？\n変更手数料: ¥1,000万`)) return;
+            
+            p.cash -= cost;
+            p.brokerCoId = newBrokerId;
+            p.lastBrokerChangeWeek = week;
+            
+            addLog("【財務】証券会社を変更しました。", "success", "財務");
+            
+            closeModal('broker-select-modal');
+            renderPortfolio();
+        };
 
         // ==========================================
         // 📣 広告会社システム
@@ -10381,7 +10521,7 @@ ${ds.desc}`)) {
                     ${!p.isPublic ? '' : (() => {
                     let floatRatio = (p.shareholders['market'] || 0) / p.shares;
                     let isFloatLow = floatRatio < 0.3;
-                    let reason = !isFloatLow ? `（浮動株が ${Math.round(floatRatio * 100)}% あるため不要）` : `（浮動株が30%未満のため実行可能）`;
+                    let reason = !isFloatLow ? `（一般株主(浮動株)が ${Math.round(floatRatio * 100)}% あるため不要）` : `（一般株主(浮動株)が30%未満のため実行可能）`;
                     let canDilute = isFloatLow && (!p.lastDilutionWeek || (week - p.lastDilutionWeek) >= 48);
                     let disabledReason = !isFloatLow ? 'disabled title="浮動株が30%未満の場合のみ実行可能"' : (p.lastDilutionWeek && (week - p.lastDilutionWeek) < 48 ? 'disabled title="前回実施から48週経過が必要"' : '');
 
@@ -13990,7 +14130,7 @@ ${ds.desc}`)) {
                     <div style="display:flex;gap:8px;margin-bottom:12px;">
                         ${[
                     { label: '時価総額', val: `¥${f(target.marketCap)}` },
-                    { label: '保有比率', val: `${ownerPct}%` },
+                    { label: '一般株主比率', val: `${((target.shareholders['market'] || 0) / (target.shares || 1) * 100).toFixed(1)}%` },
                     { label: '保有評価額', val: `¥${f(target.stockPrice * playerShares)}`, color: '#16a34a' },
                 ].map(r => `<div style="flex:1;background:#f1f5f9;border-radius:8px;padding:7px 8px;text-align:center;">
                             <div style="font-size:9px;color:#64748b;margin-bottom:2px;">${r.label}</div>
@@ -14161,6 +14301,9 @@ ${ds.desc}`)) {
                         if (labels.length < 6) {
                             let ownerCo = companies.find(c => c.id === shArray[i].id);
                             let _shName = shArray[i].id === 'player' ? '自社' : (ownerCo ? ownerCo.name.replace(/\[.*?\]\s*/, '').substring(0, 8) : shArray[i].id.replace(/^c_[A-Z]+_/, '').replace(/_\d$/, '').substring(0, 8));
+                            if (ownerCo && (ownerCo.sector === 'bank' || ownerCo.sector === 'sogo')) {
+                                _shName += ' (機関)';
+                            }
                             labels.push(_shName);
                             data.push(shArray[i].shares);
                             colors.push(shArray[i].id === 'player' ? 'var(--primary)' : (ownerCo ? ownerCo.color : '#94a3b8'));
@@ -14177,7 +14320,7 @@ ${ds.desc}`)) {
                     }
                     floatShares += Math.max(0, target.shares - totalHeld);
                     if (othersShares > 0) { labels.push('その他大株主'); data.push(othersShares); colors.push('#94a3b8'); }
-                    if (floatShares > 0) { labels.push('一般流通'); data.push(floatShares); colors.push('#e2e8f0'); }
+                    if (floatShares > 0) { labels.push('一般株主(浮動株)'); data.push(floatShares); colors.push('#e2e8f0'); }
                     window.shareholderChart = new Chart(ctx, {
                         type: 'doughnut', data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 2, borderColor: '#fff' }] },
                         options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11, family: "'Inter',sans-serif" } } }, tooltip: { callbacks: { label: function (c) { let v = c.raw || 0; return ` ${c.label}: ${v.toLocaleString()}株 (${((v / target.shares) * 100).toFixed(1)}%)`; } } } }, cutout: '65%' }
@@ -14916,7 +15059,7 @@ ${ds.desc}`)) {
             });
 
             // ☕ AIコーヒー企業の初期店舗を割り当て（難易度連動で再実行）
-            const countryRegionMap = { 'JP': ['TOKYO', 'OSAKA'], 'USA': ['USA'], 'CHINA': ['CHINA'], 'UK': ['UK'], 'KOREA': ['KOREA'], 'AUS': ['AUSTRALIA'], 'CAN': ['CANADA'], 'FRA': ['FRANCE'], 'GER': ['GERMANY'], 'IND': ['INDIA'] };
+            // ☕ AIコーヒー企業の初期店舗を割り当て（難易度連動で再実行）
             companies.filter(c => c.sector === 'coffee' && c.id !== 'player').forEach(c => {
                 c.stores = []; // 重複防止のためリセット
                 let rKeys = countryRegionMap[c.country] || [];
