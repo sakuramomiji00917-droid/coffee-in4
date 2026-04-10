@@ -1672,7 +1672,10 @@
         window._difficulty = DIFFICULTIES.normal;
 
         // ═══ 経済サイクル ═══
+        window._macro = { sentiment: 0.5, interestRate: 0.005, inflation: 0.02, volatility: 0.15 };
+        window._crisisState = { pandemic: 0, wars: {} }; // 期間(週)
         window._econ = { phase: 'normal', phaseWeek: 0, history: [] };
+        
         const ECON_PHASES = {
             boom: { label: '🟢 好景気', color: '#4ade80', consumeMult: 1.20, stockDrift: 0.02, aiExpand: 2.0 },
             normal: { label: '🟡 通常', color: '#fbbf24', consumeMult: 1.00, stockDrift: 0.00, aiExpand: 1.0 },
@@ -1685,6 +1688,22 @@
             e.phaseWeek++;
             e.history.push(e.phase);
             if (e.history.length > 100) e.history.shift();
+
+            // 🌪️ クライシス状態のチェック
+            let isGlobalCrisis = (window._crisisState.pandemic > 0);
+            let activeWars = Object.values(window._crisisState.wars || {}).filter(w => w > 0).length;
+            let isWarCrisis = activeWars >= 2; 
+
+            // クライシス中は強制的に景気後退へ
+            if (isGlobalCrisis || isWarCrisis) {
+                if (e.phase !== 'bust' && Math.random() < 0.3) {
+                    e.phase = 'bust'; e.phaseWeek = 0;
+                    addLog("【経済】深刻な国際情勢を受け、景気が後退局面に入りました。", 'alert', '経済', 3);
+                }
+                if (e.phase === 'boom') { e.phase = 'normal'; e.phaseWeek = 0; }
+                return;
+            }
+
             // 最低4週、最大24週で強制遷移
             if (e.phaseWeek < 4) return;
             if (e.phaseWeek >= 24) { e.phaseWeek = 0; e.phase = e.phase === 'bust' ? 'recovery' : e.phase === 'boom' ? 'normal' : 'normal'; return; }
@@ -1782,21 +1801,52 @@
             let events = [
                 { id: 'beanHigh', prob: 0.02, name: '☕ コーヒー豆価格高騰', desc: '産地の干ばつで豆価格が高騰。全店利益率-10%（8週間）', dur: 8, effect: () => { window._beanPriceMult = 0.90; }, clear: () => { delete window._beanPriceMult; } },
                 { id: 'beanLow', prob: 0.02, name: '☕ コーヒー豆価格暴落', desc: '大豊作で豆価格が下落。全店利益率+10%（8週間）', dur: 8, effect: () => { window._beanPriceMult = 1.10; }, clear: () => { delete window._beanPriceMult; } },
-                { id: 'tvCoverage', prob: 0.01, name: '📺 テレビ取材', desc: '人気番組であなたの店が特集！知名度+30%', dur: 1, effect: () => { let cc = p.country || 'JP'; p.brandAwareness[cc] = Math.min(100, (p.brandAwareness[cc] || 0) + 30); }, clear: () => { } },
-                { id: 'scandal', prob: 0.01, name: '🦠 食中毒スキャンダル', desc: 'ランダム企業で食中毒発生。満足度-30、知名度-10%', dur: 1, effect: () => { let victims = companies.filter(c => c.sector === 'coffee' && !c.isBankrupt && c.id !== 'player'); if (victims.length > 0) { let v = victims[Math.floor(Math.random() * victims.length)]; v.stores.forEach(s => { s.satisfaction = Math.max(0, (s.satisfaction || 60) - 30); }); let cc = v.country || 'JP'; if (v.brandAwareness) v.brandAwareness[cc] = Math.max(0, (v.brandAwareness[cc] || 0) - 10); addLog(`【スキャンダル】${v.name.replace(/\[.*?\]\s*/g, '')} で食中毒発生！`, 'alert', '経済', 4); } }, clear: () => { } },
-                { id: 'stockCrash', prob: 0.008, name: '💹 株式市場暴落', desc: '世界的な金融不安で全社株価-15%', dur: 1, effect: () => { companies.forEach(c => { if (!c.isBankrupt) c.stockPrice = Math.max(10, Math.floor(c.stockPrice * 0.85)); }); window._econ.phase = 'bust'; window._econ.phaseWeek = 0; }, clear: () => { } },
-                { id: 'stockBubble', prob: 0.008, name: '📈 株バブル', desc: '投資マネーが流入し全社株価+15%', dur: 1, effect: () => { companies.forEach(c => { if (!c.isBankrupt) c.stockPrice = Math.floor(c.stockPrice * 1.15); }); window._econ.phase = 'boom'; window._econ.phaseWeek = 0; }, clear: () => { } },
-                { id: 'tightening', prob: 0.01, name: '🏦 金融引き締め', desc: '中央銀行が利上げ。銀行貸出金利+50%（12週間）', dur: 12, effect: () => { companies.filter(c => c.sector === 'bank').forEach(b => { b._origLoanRate = b.loanRate; b.loanRate = (b.loanRate || 0.005) * 1.5; }); }, clear: () => { companies.filter(c => c.sector === 'bank').forEach(b => { if (b._origLoanRate) { b.loanRate = b._origLoanRate; delete b._origLoanRate; } }); } },
-                { id: 'easing', prob: 0.01, name: '🏦 金融緩和', desc: '中央銀行が利下げ。銀行貸出金利-30%（12週間）', dur: 12, effect: () => { companies.filter(c => c.sector === 'bank').forEach(b => { b._origLoanRate2 = b.loanRate; b.loanRate = (b.loanRate || 0.005) * 0.7; }); }, clear: () => { companies.filter(c => c.sector === 'bank').forEach(b => { if (b._origLoanRate2) { b.loanRate = b._origLoanRate2; delete b._origLoanRate2; } }); } },
-                { id: 'barista', prob: 0.01, name: '🌟 バリスタ大会優勝', desc: 'あなたの店から世界チャンピオン！全店満足度+10（4週間）', dur: 4, effect: () => { p.stores.forEach(s => { s.satisfaction = Math.min(100, (s.satisfaction || 60) + 10); }); }, clear: () => { } },
+                { id: 'tvCoverage', prob: 0.01, name: '📺 テレビ取材', desc: '人気番組であなたの店が特集！知名度+30%', dur: 1, effect: () => { let cc = p.country || 'JP'; p.brandAwareness[cc] = Math.min(100, (p.brandAwareness[cc] || 0) + 30); if(window._macro) window._macro.sentiment += 0.05; }, clear: () => { } },
+                { id: 'scandal', prob: 0.01, name: '🦠 食中毒スキャンダル', desc: 'ランダム企業で食中毒発生。満足度-30、知名度-10%', dur: 1, effect: () => { 
+                    let victims = companies.filter(c => c.sector === 'coffee' && !c.isBankrupt && c.id !== 'player'); 
+                    if (victims.length > 0) { 
+                        let v = victims[Math.floor(Math.random() * victims.length)]; 
+                        v.stores.forEach(s => { s.satisfaction = Math.max(0, (s.satisfaction || 60) - 30); }); 
+                        let cc = v.country || 'JP'; if (v.brandAwareness) v.brandAwareness[cc] = Math.max(0, (v.brandAwareness[cc] || 0) - 10); 
+                        addLog(`【スキャンダル】${v.name.replace(/\[.*?\]\s*/g, '')} で食中毒発生！`, 'alert', '経済', 4); 
+                        if(window._macro) window._macro.sentiment -= 0.10;
+                    } 
+                }, clear: () => { } },
+                { id: 'stockCrash', prob: 0.008, name: '💹 株式市場暴落', desc: '世界的な金融不安で全社株価-15%', dur: 1, effect: () => { companies.forEach(c => { if (!c.isBankrupt) c.stockPrice = Math.max(10, Math.floor(c.stockPrice * 0.85)); }); window._econ.phase = 'bust'; window._econ.phaseWeek = 0; if(window._macro) window._macro.sentiment -= 0.20; }, clear: () => { } },
+                { id: 'stockBubble', prob: 0.008, name: '📈 株バブル', desc: '投資マネーが流入し全社株価+15%', dur: 1, effect: () => { companies.forEach(c => { if (!c.isBankrupt) c.stockPrice = Math.floor(c.stockPrice * 1.15); }); window._econ.phase = 'boom'; window._econ.phaseWeek = 0; if(window._macro) window._macro.sentiment += 0.15; }, clear: () => { } },
+                { id: 'tightening', prob: 0.01, name: '🏦 金融引き締め', desc: '中央銀行が利上げ。銀行貸出金利+50%（12週間）', dur: 12, effect: () => { 
+                    companies.filter(c => c.sector === 'bank').forEach(b => { b._origLoanRate = b.loanRate; b.loanRate = (b.loanRate || 0.005) * 1.5; }); 
+                    if(window._macro) window._macro.interestRate += 0.005;
+                }, clear: () => { 
+                    companies.filter(c => c.sector === 'bank').forEach(b => { if (b._origLoanRate) { b.loanRate = b._origLoanRate; delete b._origLoanRate; } }); 
+                    if(window._macro) window._macro.interestRate = Math.max(0.001, window._macro.interestRate - 0.005);
+                } },
+                { id: 'easing', prob: 0.01, name: '🏦 金融緩和', desc: '中央銀行が利下げ。銀行貸出金利-30%（12週間）', dur: 12, effect: () => { 
+                    companies.filter(c => c.sector === 'bank').forEach(b => { b._origLoanRate2 = b.loanRate; b.loanRate = (b.loanRate || 0.005) * 0.7; }); 
+                    if(window._macro) window._macro.interestRate = Math.max(0.001, window._macro.interestRate - 0.003);
+                }, clear: () => { 
+                    companies.filter(c => c.sector === 'bank').forEach(b => { if (b._origLoanRate2) { b.loanRate = b._origLoanRate2; delete b._origLoanRate2; } }); 
+                    if(window._macro) window._macro.interestRate += 0.003;
+                } },
+                { id: 'barista', prob: 0.01, name: '🌟 バリスタ大会優勝', desc: 'あなたの店から世界チャンピオン！全店満足度+10（4週間）', dur: 4, effect: () => { p.stores.forEach(s => { s.satisfaction = Math.min(100, (s.satisfaction || 60) + 10); }); if(window._macro) window._macro.sentiment += 0.03; }, clear: () => { } },
                 { id: 'bigTenant', prob: 0.02, name: '🏢 大口テナント獲得', desc: '所有ビルに大手企業が一括入居！NPC+3', dur: 1, effect: () => { let owned = []; Object.keys(globalNetworkData).forEach(rk => { globalNetworkData[rk].districts.forEach(dd => { dd.properties.forEach(pp => { if (pp.owner === 'player' && pp.npcSlots > 0 && pp.occupiedNPCSlots < pp.npcSlots) owned.push(pp); }); }); }); if (owned.length > 0) { let t = owned[Math.floor(Math.random() * owned.length)]; t.occupiedNPCSlots = Math.min(t.npcSlots, t.occupiedNPCSlots + 3); } }, clear: () => { } },
                 { id: 'fxShock', prob: 0.02, name: '💸 為替急変', desc: '海外店舗の売上に影響。±15%変動（4週間）', dur: 4, effect: () => { window._fxMult = Math.random() > 0.5 ? 1.15 : 0.85; }, clear: () => { delete window._fxMult; } },
-                { id: 'pandemic', prob: 0.005, name: '🦠 パンデミック', desc: '感染症の流行で全店客数-30%（12週間）', dur: 12, effect: () => { window._pandemicMult = 0.70; }, clear: () => { delete window._pandemicMult; } },
+                { id: 'pandemic', prob: 0.005, name: '🦠 パンデミック', desc: '感染症の流行で全店客数-30%（12週間）', dur: 12, effect: () => { window._pandemicMult = 0.70; if(window._macro) window._macro.sentiment -= 0.15; }, clear: () => { delete window._pandemicMult; } },
                 // 📊 セクター・材料イベント
                 { id: 'itBubble', prob: 0.015, name: '💻 次世代AI革命', desc: 'ITセクターへの期待が爆発。IT関連株が大幅上昇（8週間）', dur: 8, effect: () => { window._sectorDrifts['it'] = 0.06; }, clear: () => { delete window._sectorDrifts['it']; } },
                 { id: 'logiCrisis', prob: 0.012, name: '🚚 燃料コスト危機', desc: '原油高騰により物流網が圧迫。物流株が下落（6週間）', dur: 6, effect: () => { window._sectorDrifts['log'] = -0.05; }, clear: () => { delete window._sectorDrifts['log']; } },
                 { id: 'reCrash', prob: 0.008, name: '🏢 不動産バブル崩壊', desc: '都市再開発の停滞により、不動産株が急落（12週間）', dur: 12, effect: () => { window._sectorDrifts['re'] = -0.08; }, clear: () => { delete window._sectorDrifts['re']; } },
                 { id: 'coffeeTrend', prob: 0.015, name: '☕ 第4次コーヒーブーム', desc: '世界的な需要増によりコーヒー企業の評価が急上昇（8週間）', dur: 8, effect: () => { window._sectorDrifts['coffee'] = 0.07; }, clear: () => { delete window._sectorDrifts['coffee']; } },
+                // 🌪️ 鬼畜イベント (Hard/Real)
+                { id: 'pandemic_brutal', prob: d.brutalProb || 0, name: '🦠 【最凶】全世界感染症', desc: '全世界の売上が90%減少。地獄の1年が始まります。', dur: 52, effect: () => { window._crisisState.pandemic = 52; window._econ.phase = 'bust'; window._econ.phaseWeek = 0; if(window._macro) window._macro.sentiment = 0.5; }, clear: () => { } },
+                { id: 'war_brutal', prob: (d.brutalProb || 0) * 1.5, name: '🪖 【最凶】地域紛争勃発', desc: '特定地域の売上が90%減少。泥沼の1年が始まります。', dur: 52, effect: () => { 
+                    let rks = Object.keys(globalNetworkData);
+                    let rk = rks[Math.floor(Math.random() * rks.length)];
+                    window._crisisState.wars[rk] = 52;
+                    window._econ.phase = 'bust'; window._econ.phaseWeek = 0;
+                    if(window._macro) window._macro.sentiment -= 0.15;
+                    addLog(`【紛争勃発】${globalNetworkData[rk]?.name || rk} での大規模紛争により、該当地域の経済が停止。`, 'alert', '地政学', 5);
+                }, clear: () => { } },
             ];
             // イベント終了チェック
             Object.keys(window._activeEvents).forEach(eid => {
@@ -1975,7 +2025,6 @@
             companies.forEach(c => { if (c.sector !== 'sogo' && c.sector !== 'bank') window.assignBroker(c); });
 
             // 🏢 不動産会社の初期物件割り当て（自国の物件をランダムに2〜4件所有）
-            const countryRegionMap = { 'JP': ['TOKYO', 'OSAKA'], 'USA': ['USA'], 'CHINA': ['CHINA'], 'UK': ['UK'], 'KOREA': ['KOREA'], 'AUS': ['AUSTRALIA'], 'CAN': ['CANADA'], 'FRA': ['FRANCE'], 'GER': ['GERMANY'], 'IND': ['INDIA'] };
             companies.filter(c => c.sector === 're' && c.country).forEach(re => {
                 let regionKeys = (countryRegionMap[re.country] || Object.keys(globalNetworkData));
                 let assigned = 0;
@@ -2531,24 +2580,82 @@
 
             // ═══ 経済サイクル更新 ═══
             window.advanceEconCycle();
+
+            // 🌪️ クライシス継続タイマー
+            if (window._crisisState) {
+                if (window._crisisState.pandemic > 0) window._crisisState.pandemic--;
+                Object.keys(window._crisisState.wars || {}).forEach(rk => {
+                    if (window._crisisState.wars[rk] > 0) window._crisisState.wars[rk]--;
+                });
+            }
+
+            // 📊 マクロ変数の動的更新
+            if (window._macro) {
+                let d = window._difficulty;
+                let phase = window._econ.phase;
+                // センチメントの自然回帰
+                window._macro.sentiment += (0.5 - window._macro.sentiment) * 0.05;
+                // 景気フェーズによる影響
+                if (phase === 'boom') window._macro.sentiment += 0.02;
+                else if (phase === 'bust') window._macro.sentiment -= 0.03;
+                window._macro.sentiment = Math.max(0, Math.min(1, window._macro.sentiment));
+                // ボラティリティの調整
+                window._macro.volatility = 0.10 + (1 - window._macro.sentiment) * 0.20;
+            }
+
             // ═══ ランダムイベント処理 ═══
             window.processRandomEvents();
             // ═══ 株主報復チェック ═══
             window.processShareholderRetaliation();
+            
             let _econMult = window.getEconMult();
             let _econDrift = window.getEconStockDrift();
             let _econPhase = window._econ.phase;
+
+            // 追証 (Forced Liquidation) チェック
+            let p = companies[0];
+            if (p) {
+                let maintenanceRequirement = 0.25; // 25% 維持率
+                // 信用買いポジションのチェック
+                if (p._marginLongs) {
+                    Object.keys(p._marginLongs).forEach(coId => {
+                        let pos = p._marginLongs[coId];
+                        let co = companies.find(c => c.id === coId);
+                        if (!co || pos.count <= 0) return;
+                        let marketValue = co.stockPrice * pos.count;
+                        let debt = (pos.avgPrice * pos.count) - pos.margin; // 借りている額
+                        let equity = marketValue - debt;
+                        let ratio = equity / marketValue;
+                        if (ratio < maintenanceRequirement) {
+                            addLog(`【追証】${co.name.replace(/\[.*?\]\s*/,'')} の信用買いが維持率を下回ったため強制決済されました。`, 'alert', '市場', 5);
+                            window.closeMarginLong(coId); // 強制決済関数 (既存または新規)
+                        }
+                    });
+                }
+                // 空売りポジションのチェック
+                if (p._marginShorts) {
+                    Object.keys(p._marginShorts).forEach(coId => {
+                        let pos = p._marginShorts[coId];
+                        let co = companies.find(c => c.id === coId);
+                        if (!co || pos.count <= 0) return;
+                        let marketValue = co.stockPrice * pos.count;
+                        let equity = pos.margin + (pos.avgPrice * pos.count) - marketValue;
+                        let ratio = equity / marketValue;
+                        if (ratio < maintenanceRequirement) {
+                            addLog(`【追証】${co.name.replace(/\[.*?\]\s*/,'')} の空売りが逆行し強制ロスカットされました。`, 'alert', '市場', 5);
+                            window.closeMarginShort(coId);
+                        }
+                    });
+                }
+            }
+            
             // 景気変動時にログ
             if (window._econ.phaseWeek === 0) {
                 let _phaseNames = { boom: '好景気', normal: '通常', bust: '不景気', recovery: '回復期' };
                 addLog(`【経済】景気が「${_phaseNames[_econPhase]}」に変わりました。消費${_econMult > 1 ? '+' : ''}${Math.round((_econMult - 1) * 100)}%`, _econPhase === 'bust' ? 'alert' : _econPhase === 'boom' ? 'success' : 'normal', '経済', 3);
-                window.pushNotify(_econPhase === 'bust' ? 'urgent' : 'important', window.getEconLabel(), `消費${_econMult > 1 ? '+' : ''}${Math.round((_econMult - 1) * 100)}%`);
             }
-            // ランダムイベント処理
-            if (typeof window.processRandomEvents === 'function') window.processRandomEvents();
 
             // 🌟 最優先：プレイヤー変数を定義（ここでエラーを完全に防ぎます）
-            let p = companies[0];
             if (!p) return;
 
             let pRev = 0, pExp = 0, pDiv = 0, pTax = 0, pNet = 0, pPropInc = 0, pInflate = 0; window._pBrandRoyalty = 0;
@@ -11837,8 +11944,21 @@ ${ds.desc}`)) {
                                     <div style="display:flex;justify-content:space-between;font-size:10px;color:#94a3b8;margin-bottom:3px;"><span>0%</span><span id="trade-slider-pct">0%</span><span>40%</span></div>
                                     <input type="range" id="trade-pct-slider" min="0" max="40" step="1" value="0" oninput="syncTradeFromSlider()" style="width:100%;accent-color:var(--primary);">
                                 </div>
-                                <div class="flex-between" style="margin-bottom:20px; padding-top:15px; border-top:1px dashed var(--border);">
-                                    <div id="trade-estimate-label" style="font-size:13px; color:var(--text-mut); font-weight:bold;">概算:</div><div id="trade-estimate-total" style="font-size:22px; font-weight:900;">¥0</div>
+                                <div class="flex-between" style="margin-bottom:8px; padding-top:15px; border-top:1px dashed var(--border);">
+                                    <div id="trade-estimate-label" style="font-size:13px; color:var(--text-mut); font-weight:bold;">執行単価(概算):</div><div id="trade-estimate-exec" style="font-size:18px; font-weight:900;">¥0</div>
+                                </div>
+                                <div id="slippage-area" style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:12px; color:#64748b;">
+                                    <span>市場インパクト:</span><span id="trade-slippage-pct" style="font-weight:bold; color:var(--danger);">0.00%</span>
+                                </div>
+                                <div id="margin-risk-area" style="display:none; background:#fff1f2; border:1px solid #fecdd3; padding:10px; border-radius:8px; margin-bottom:12px;">
+                                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                                        <span style="font-size:11px; font-weight:bold; color:#be123c;">予想維持率:</span>
+                                        <span id="trade-margin-ratio" style="font-size:16px; font-weight:900; color:#e11d48;">---%</span>
+                                    </div>
+                                    <div style="font-size:9px; color:#fb7185; margin-top:2px;">※25%を下回ると翌週に強制決済(追証)が発生。</div>
+                                </div>
+                                <div class="flex-between" style="margin-bottom:20px; padding-bottom:15px; border-bottom:1px dashed var(--border);">
+                                    <div style="font-size:13px; color:var(--text-mut); font-weight:bold;">合計概算額:</div><div id="trade-estimate-total" style="font-size:22px; font-weight:900; color:var(--primary);">¥0</div>
                                 </div>
                                 <button class="btn-primary btn-large" style="margin-bottom:15px; border-radius:12px;" onclick="executeTrade()">注文確定</button>
                                 <div style="display:flex; gap: 8px; align-items: stretch;">
@@ -12012,8 +12132,37 @@ ${ds.desc}`)) {
         window.calcTrade = function () {
             let c = companies.find(x => x.id === tradingCompanyId);
             let a = parseInt(document.getElementById('trade-amount').value) || 0;
+            let p = companies[0];
+
+            // スリッページ計算（執行単価のシミュレーション）
+            let impactFactor = (a / c.shares) * 5.0;
             let price = window.tradeType === 'limit' ? (parseInt(document.getElementById('trade-limit-price').value) || 0) : c.stockPrice;
-            document.getElementById('trade-estimate-total').innerText = `¥${(price * a).toLocaleString()}`;
+            let slippage = 0;
+            let execPrice = price;
+
+            if (tradeMode === 'buy' || window._isMarginMode) { 
+                // 買い or 空売り（買い戻し含む）は不利な方向に動く
+                slippage = price * impactFactor * 0.5;
+                execPrice = price + slippage;
+            } else {
+                slippage = price * impactFactor * 0.5;
+                execPrice = Math.max(10, price - slippage);
+            }
+
+            document.getElementById('trade-estimate-exec').innerText = `¥${Math.floor(execPrice).toLocaleString()}`;
+            document.getElementById('trade-slippage-pct').innerText = (impactFactor * 100).toFixed(2) + '%';
+            document.getElementById('trade-estimate-total').innerText = `¥${Math.floor(execPrice * a).toLocaleString()}`;
+
+            // 信用維持率のシミュレーション
+            let marginArea = document.getElementById('margin-risk-area');
+            if (window._isMarginMode && a > 0) {
+                marginArea.style.display = 'block';
+                let ratio = 0.50; // 新規建て時は基本50%
+                document.getElementById('trade-margin-ratio').innerText = (ratio * 100).toFixed(1) + '%';
+            } else {
+                marginArea.style.display = 'none';
+            }
+
             // スライダー表示をbuyモードのときだけ更新
             if (tradeMode === 'buy') {
                 let _trFloat = window.getFloatShares(c);
@@ -12095,7 +12244,21 @@ ${ds.desc}`)) {
             let target = companies.find(x => x.id === targetId);
             if (!actor || !target || amount <= 0) return false;
 
-            let totalPrice = price * amount;
+            // 🌊 【新規】非線形スリッページ（マーケットインパクト）
+            // 取引量が発行済み株式数に対して大きくなるほど、価格が動く
+            let impactFactor = (amount / target.shares) * 5.0; // 基準: 1%の取引で5%の価格インパクト
+            let slippage = 0;
+            let execPrice = price;
+
+            if (type === 'spot' || type === 'marginlong') {
+                slippage = price * impactFactor * 0.5; // 即時インパクトの半分を実行価格に乗せる
+                execPrice = price + slippage;
+            } else if (type === 'spot_sell' || type === 'marginshort') {
+                slippage = price * impactFactor * 0.5;
+                execPrice = Math.max(10, price - slippage);
+            }
+
+            let totalPrice = execPrice * amount;
             
             // ブローカー特定
             if (!actor.brokerCoId) {
@@ -12130,21 +12293,22 @@ ${ds.desc}`)) {
                 let curAvg = actor._spotAvgPrices[targetId] || 0;
                 let curCount = (target.shareholders[actorId] || 0) - amount;
                 actor._spotAvgPrices[targetId] = (curAvg * curCount + totalPrice) / (curCount + amount);
-                // playerTotalCost に取得コストを積算（ポートフォリオの取得単価表示用）
                 if (actorId === 'player') target.playerTotalCost = (target.playerTotalCost || 0) + totalPrice;
                 
-                if (actorId === 'player') addLog(`【現物取得】${target.name.replace(/\[.*?\]\s*/,'')} ${amount.toLocaleString()}株 取得。`, 'success', '自社');
+                // 価格インパクトの適用（他者への波及）
+                target.stockPrice = Math.floor(target.stockPrice * (1 + impactFactor));
+
+                if (actorId === 'player') addLog(`【現物取得】${target.name.replace(/\[.*?\]\s*/,'')} ${amount.toLocaleString()}株 取得 (@¥${execPrice.toLocaleString()})。`, 'success', '自社');
             } else if (type === 'spot_sell') {
                 // 現物売却
                 let owned = target.shareholders[actorId] || 0;
                 if (owned < amount) return false;
                 actor.cash += (totalPrice - comm);
                 if (broker) { broker.cash += comm; broker.lastRevenue += comm; }
-                // コスト按分と損益計算
                 let _spotProfit = 0;
                 if (actorId === 'player') {
                     let avgCost = owned > 0 ? (target.playerTotalCost || 0) / owned : 0;
-                    _spotProfit = (price - avgCost) * amount;
+                    _spotProfit = (execPrice - avgCost) * amount;
                     target.playerTotalCost = Math.max(0, (target.playerTotalCost || 0) - avgCost * amount);
                     window.weeklyStockSaleProfit = (window.weeklyStockSaleProfit || 0) + _spotProfit;
                     if (actor._spotAvgPrices) { if (target.shareholders[actorId] - amount <= 0) delete actor._spotAvgPrices[targetId]; }
@@ -12152,9 +12316,13 @@ ${ds.desc}`)) {
                 target.shareholders[actorId] -= amount;
                 if (target.isPublic) target.shareholders['market'] = (target.shareholders['market'] || 0) + amount;
                 if (target.shareholders[actorId] <= 0) { target.shareholders[actorId] = 0; if (actorId === 'player') target.playerTotalCost = 0; }
+                
+                // 価格インパクトの適用（売り圧）
+                target.stockPrice = Math.max(10, Math.floor(target.stockPrice * (1 - impactFactor)));
+
                 if (actorId === 'player') {
                     let _profSign = _spotProfit >= 0 ? '+' : '';
-                    addLog(`【現物売却】${target.name.replace(/\[.*?\]\s*/,'')} ${amount.toLocaleString()}株 @ ¥${price.toLocaleString()} (損益: ${_profSign}¥${Math.floor(_spotProfit/10000).toLocaleString()}万)`, _spotProfit >= 0 ? 'success' : 'warning', '自社');
+                    addLog(`【現物売却】${target.name.replace(/\[.*?\]\s*/,'')} ${amount.toLocaleString()}株 @ ¥${execPrice.toLocaleString()} (損益: ${_profSign}¥${Math.floor(_spotProfit/10000).toLocaleString()}万)`, _spotProfit >= 0 ? 'success' : 'warning', '自社');
                 }
             } else if (type === 'marginlong') {
                 // 信用買い
@@ -12169,7 +12337,9 @@ ${ds.desc}`)) {
                 pos.count += amount;
                 pos.margin += marginReq;
                 actor._marginLongs[targetId] = pos;
-                if (actorId === 'player') addLog(`【信用買い執行】${target.name.replace(/\[.*?\]\s*/,'')} ${amount.toLocaleString()}株 (証拠金 ¥${Math.floor(marginReq/10000).toLocaleString()}万)。`, 'success', '自社');
+
+                target.stockPrice = Math.floor(target.stockPrice * (1 + impactFactor));
+                if (actorId === 'player') addLog(`【信用買い執行】${target.name.replace(/\[.*?\]\s*/,'')} ${amount.toLocaleString()}株 (@¥${execPrice.toLocaleString()})。`, 'success', '自社');
             } else if (type === 'marginshort') {
                 // 空売り
                 let marginReq = Math.floor(totalPrice * 0.5);
@@ -12183,7 +12353,9 @@ ${ds.desc}`)) {
                 pos.count += amount;
                 pos.margin += marginReq;
                 actor._marginShorts[targetId] = pos;
-                if (actorId === 'player') addLog(`【新規空売り】${target.name.replace(/\[.*?\]\s*/,'')} ${amount.toLocaleString()}株 (証拠金 ¥${Math.floor(marginReq/10000).toLocaleString()}万)。`, 'alert', '自社');
+
+                target.stockPrice = Math.max(10, Math.floor(target.stockPrice * (1 - impactFactor)));
+                if (actorId === 'player') addLog(`【新規空売り】${target.name.replace(/\[.*?\]\s*/,'')} ${amount.toLocaleString()}株 (@¥${execPrice.toLocaleString()})。`, 'alert', '自社');
             }
             return true;
         };
@@ -14740,6 +14912,31 @@ ${ds.desc}`)) {
                 if (c.id !== 'player' && !c.isBankrupt) {
                     c.cash = Math.floor(c.cash * d.aiStartScale);
                     c.stockPrice = Math.floor(c.stockPrice * d.aiStartScale);
+                }
+            });
+
+            // ☕ AIコーヒー企業の初期店舗を割り当て（難易度連動で再実行）
+            const countryRegionMap = { 'JP': ['TOKYO', 'OSAKA'], 'USA': ['USA'], 'CHINA': ['CHINA'], 'UK': ['UK'], 'KOREA': ['KOREA'], 'AUS': ['AUSTRALIA'], 'CAN': ['CANADA'], 'FRA': ['FRANCE'], 'GER': ['GERMANY'], 'IND': ['INDIA'] };
+            companies.filter(c => c.sector === 'coffee' && c.id !== 'player').forEach(c => {
+                c.stores = []; // 重複防止のためリセット
+                let rKeys = countryRegionMap[c.country] || [];
+                if (rKeys.length === 0) return;
+                let base = 4 + Math.floor(Math.random() * 5); // 4-8
+                let targetCount = Math.floor(base * (window._difficulty?.aiStartScale || 1.0));
+                let placed = 0; let att = 0;
+                while (placed < targetCount && att < 150) {
+                    att++;
+                    let rk = rKeys[Math.floor(Math.random() * rKeys.length)];
+                    let dists = globalNetworkData[rk].districts;
+                    let dist = dists[Math.floor(Math.random() * dists.length)];
+                    let prop = dist.properties[Math.floor(Math.random() * dist.properties.length)];
+                    if (prop && prop.coffeeTenant === null) {
+                        prop.coffeeTenant = c.id;
+                        let s = new Store(`[${dist.name}] ${prop.type}`, prop.rent, prop.traffic, prop.owner, prop.id, rk, dist.name, dist.properties.indexOf(prop));
+                        s._openWeek = 1;
+                        c.stores.push(s);
+                        placed++;
+                    }
                 }
             });
             let inputName = document.getElementById('player-company-name-input').value;
